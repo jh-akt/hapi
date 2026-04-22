@@ -14,6 +14,7 @@ import type { Store } from '../store'
 import type { RpcRegistry } from '../socket/rpcRegistry'
 import type { SSEManager } from '../sse/sseManager'
 import { NativeSessionManager, type NativeSessionDiscoverItem } from '../native/sessionManager'
+import type { NativeLeadershipOptions } from '../native/leadership'
 import { EventPublisher, type SyncEventListener } from './eventPublisher'
 import { MachineCache, type Machine } from './machineCache'
 import { MessageService } from './messageService'
@@ -48,6 +49,10 @@ export type ForkSessionResult =
     | { type: 'success'; sessionId: string }
     | { type: 'error'; message: string; code: 'session_not_found' | 'access_denied' | 'no_machine_online' | 'fork_unavailable' | 'fork_failed' }
 
+export type SyncEngineOptions = {
+    nativeLeadership?: NativeLeadershipOptions
+}
+
 export class SyncEngine {
     private readonly store: Store
     private readonly eventPublisher: EventPublisher
@@ -62,7 +67,8 @@ export class SyncEngine {
         store: Store,
         io: Server,
         rpcRegistry: RpcRegistry,
-        sseManager: SSEManager
+        sseManager: SSEManager,
+        options: SyncEngineOptions = {}
     ) {
         this.store = store
         this.eventPublisher = new EventPublisher(sseManager, (event) => this.resolveNamespace(event))
@@ -76,6 +82,7 @@ export class SyncEngine {
             getSessionsByNamespace: (namespace) => this.sessionCache.getSessionsByNamespace(namespace),
             getSession: (sessionId) => this.getSession(sessionId),
             getSessionByNamespace: (sessionId, namespace) => this.getSessionByNamespace(sessionId, namespace),
+            reloadState: () => this.reloadAll(),
             getOrCreateSession: (...args) => this.sessionCache.getOrCreateSession(...args),
             updateSessionMetadata: (sessionId, metadata, options) => this.sessionCache.updateSessionMetadata(sessionId, metadata, options),
             updateSessionAgentState: (sessionId, agentState) => this.sessionCache.updateSessionAgentState(sessionId, agentState),
@@ -83,8 +90,7 @@ export class SyncEngine {
             getMessageCount: (sessionId) => this.store.messages.getMessages(sessionId, 1).length,
             handleSessionAlive: (payload) => this.handleSessionAlive(payload),
             handleSessionEnd: (payload) => this.handleSessionEnd(payload)
-        })
-        void this.nativeSessions.restoreTrackedSessions()
+        }, options.nativeLeadership)
         this.inactivityTimer = setInterval(() => this.expireInactive(), 5_000)
     }
 

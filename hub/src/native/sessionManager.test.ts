@@ -5,7 +5,8 @@ import {
     extractCodexSessionIdFromShellSnapshotName,
     inferNativeCommandFromProcessCommand,
     isShellLikeCommand,
-    parseTmuxPaneLine
+    parseTmuxPaneLine,
+    selectCodexSessionIdFromRecentShellSnapshots
 } from './sessionManager'
 
 describe('parseTmuxPaneLine', () => {
@@ -49,6 +50,32 @@ describe('native resume helpers', () => {
 
         expect(result?.sessionId).toBe('019db6e5-13fd-78b2-a605-918b09a26c91')
         expect(result?.createdAtMs).toBeCloseTo(1776889959438.981, 3)
+    })
+
+    it('keeps a shell snapshot match when the recent window only contains one session', () => {
+        expect(selectCodexSessionIdFromRecentShellSnapshots([
+            {
+                sessionId: '019db6e5-13fd-78b2-a605-918b09a26c91',
+                createdAtMs: 1776889959438.981
+            },
+            {
+                sessionId: '019db6e5-13fd-78b2-a605-918b09a26c91',
+                createdAtMs: 1776889960438.981
+            }
+        ], 1776889959000)).toBe('019db6e5-13fd-78b2-a605-918b09a26c91')
+    })
+
+    it('refuses ambiguous shell snapshot matches across multiple sessions', () => {
+        expect(selectCodexSessionIdFromRecentShellSnapshots([
+            {
+                sessionId: '019db6e5-13fd-78b2-a605-918b09a26c91',
+                createdAtMs: 1776889959438.981
+            },
+            {
+                sessionId: '019db6e6-13fd-78b2-a605-918b09a26c92',
+                createdAtMs: 1776889960438.981
+            }
+        ], 1776889959000)).toBeNull()
     })
 
     it('builds a resumable codex command from the stored session ID', () => {

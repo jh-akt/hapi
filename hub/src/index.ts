@@ -11,6 +11,7 @@
 import { createConfiguration, type ConfigSource } from './configuration'
 import { Store } from './store'
 import { SyncEngine, type SyncEvent } from './sync/syncEngine'
+import { buildNativeLeadershipLockPath } from './native/leadership'
 import { NotificationHub } from './notifications/notificationHub'
 import type { NotificationChannel } from './notifications/notificationTypes'
 import { HappyBot } from './telegram/bot'
@@ -95,6 +96,11 @@ function mergeCorsOrigins(base: string[], extra: string[]): string[] {
         merged.add(origin)
     }
     return Array.from(merged)
+}
+
+function parseNativeLeaderPriority(raw: string | undefined): number {
+    const parsed = Number.parseInt(raw ?? '', 10)
+    return Number.isFinite(parsed) ? parsed : 100
 }
 
 let syncEngine: SyncEngine | null = null
@@ -183,7 +189,16 @@ async function main() {
         onBackgroundTaskDelta: (sessionId, delta) => syncEngine?.handleBackgroundTaskDelta(sessionId, delta)
     })
 
-    syncEngine = new SyncEngine(store, socketServer.io, socketServer.rpcRegistry, sseManager)
+    syncEngine = new SyncEngine(store, socketServer.io, socketServer.rpcRegistry, sseManager, {
+        nativeLeadership: config.dbPath === ':memory:' || config.dbPath.startsWith('file::memory:')
+            ? undefined
+            : {
+                lockPath: process.env.HAPI_NATIVE_LEADER_LOCK_PATH || buildNativeLeadershipLockPath(config.dbPath),
+                serviceLabel: process.env.HAPI_LAUNCHD_LABEL || `com.hapi.hub.${config.listenPort}`,
+                publicUrl: config.publicUrl,
+                priority: parseNativeLeaderPriority(process.env.HAPI_NATIVE_LEADER_PRIORITY)
+            }
+    })
 
     const notificationChannels: NotificationChannel[] = [
         new PushNotificationChannel(pushService, sseManager, visibilityTracker, config.publicUrl)

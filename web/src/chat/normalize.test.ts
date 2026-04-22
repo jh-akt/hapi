@@ -13,6 +13,18 @@ function makeMessage(content: unknown): DecryptedMessage {
 }
 
 describe('normalizeDecryptedMessage', () => {
+    it('drops raw native-attached tmux snapshots from the chat view', () => {
+        const message = makeMessage({
+            role: 'agent',
+            content: 'codex\nhaojiang@Mac hapi % codex\n› hello',
+            meta: {
+                source: 'native-attached'
+            }
+        })
+
+        expect(normalizeDecryptedMessage(message)).toBeNull()
+    })
+
     it('drops unsupported Claude system output records', () => {
         const message = makeMessage({
             role: 'agent',

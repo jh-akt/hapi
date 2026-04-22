@@ -3,12 +3,22 @@ import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { homedir, hostname, platform } from 'node:os'
 import { basename, join } from 'node:path'
+import { AGENT_MESSAGE_PAYLOAD_TYPE } from '@hapi/protocol'
 import type { AgentState, DecryptedMessage, Metadata, Session } from '@hapi/protocol/types'
 import {
     mapNativeCodexApprovalKey,
     parseNativeCodexCommandPermissionPrompt,
     parseNativeCodexCommandPermissionResult
 } from './codexPermissions'
+import {
+    createNativeCodexTranscriptState,
+    syncNativeCodexTranscript,
+    type NativeCodexTranscriptState
+} from './codexTranscript'
+import {
+    NativeLeadershipCoordinator,
+    type NativeLeadershipOptions
+} from './leadership'
 import { diffCapturedTmuxOutput } from './outputSync'
 
 type NativeCommand = 'codex' | 'claude'
@@ -24,6 +34,7 @@ const INITIAL_CAPTURE_LINES = '-2000'
 const CODEX_SESSION_ID_SYNC_INTERVAL_MS = 3_000
 const CODEX_SHELL_SNAPSHOT_MAX_AGE_MS = 30_000
 const CODEX_SHELL_SNAPSHOT_DIR = join(homedir(), '.codex', 'shell_snapshots')
+const NATIVE_TRANSCRIPT_USER_ECHO_MAX_AGE_MS = 60_000
 
 export type NativeSessionDiscoverItem = {
     tmuxSession: string
@@ -78,6 +89,8 @@ type NativeTracker = {
     lastCodexSessionIdSyncAt: number
     thinking: boolean
     pendingPermission: NativePendingPermissionRequest | null
+    recentUserInputs: Array<{ text: string; createdAt: number }>
+    transcript: NativeCodexTranscriptState
     timer: NodeJS.Timeout | null
 }
 
@@ -93,6 +106,7 @@ type NativeSessionManagerDeps = {
     getSessionsByNamespace: (namespace: string) => Session[]
     getSession: (sessionId: string) => Session | undefined
     getSessionByNamespace: (sessionId: string, namespace: string) => Session | undefined
+    reloadState: () => void
     getOrCreateSession: (
         tag: string,
         metadata: unknown,
@@ -148,6 +162,10 @@ function isEnabledNativeCommand(command: NativeCommand): command is EnabledNativ
 
 function normalizeSnapshot(snapshot: string): string {
     return snapshot.replace(/\r\n/g, '\n')
+}
+
+function normalizeComparableText(value: string): string {
+    return value.trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
 export function parseTmuxPaneLine(line: string): ParsedTmuxPaneLine | null {
@@ -380,15 +398,25 @@ export function extractCodexSessionIdFromShellSnapshotName(fileName: string): { 
     }
 }
 
+export function selectCodexSessionIdFromRecentShellSnapshots(
+    entries: Array<{ sessionId: string; createdAtMs: number }>,
+    sinceMs: number
+): string | null {
+    const candidates = entries
+        .filter((entry) => entry.createdAtMs >= sinceMs && entry.createdAtMs - sinceMs <= CODEX_SHELL_SNAPSHOT_MAX_AGE_MS)
+        .sort((a, b) => a.createdAtMs - b.createdAtMs)
+
+    const uniqueSessionIds = Array.from(new Set(candidates.map((entry) => entry.sessionId)))
+    return uniqueSessionIds.length === 1 ? uniqueSessionIds[0] : null
+}
+
 function resolveCodexSessionIdFromRecentShellSnapshots(sinceMs: number): string | null {
     try {
-        const candidates = readdirSync(CODEX_SHELL_SNAPSHOT_DIR)
+        const entries = readdirSync(CODEX_SHELL_SNAPSHOT_DIR)
             .map((fileName) => extractCodexSessionIdFromShellSnapshotName(fileName))
             .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-            .filter((entry) => entry.createdAtMs >= sinceMs && entry.createdAtMs - sinceMs <= CODEX_SHELL_SNAPSHOT_MAX_AGE_MS)
-            .sort((a, b) => a.createdAtMs - b.createdAtMs)
 
-        return candidates[0]?.sessionId ?? null
+        return selectCodexSessionIdFromRecentShellSnapshots(entries, sinceMs)
     } catch {
         return null
     }
@@ -610,12 +638,29 @@ export class NativeSessionManager {
     private readonly os = platform()
     private readonly trackers: Map<string, NativeTracker> = new Map()
     private readonly deps: NativeSessionManagerDeps
+    private readonly leadership: NativeLeadershipCoordinator | null
 
-    constructor(deps: NativeSessionManagerDeps) {
+    constructor(deps: NativeSessionManagerDeps, leadershipOptions?: NativeLeadershipOptions) {
         this.deps = deps
+        this.leadership = leadershipOptions
+            ? new NativeLeadershipCoordinator(leadershipOptions, {
+                onAcquired: async () => {
+                    this.deps.reloadState()
+                    await this.restoreTrackedSessions()
+                },
+                onLost: () => {
+                    this.stopAllTracking(true)
+                }
+            })
+            : null
+        this.leadership?.start()
     }
 
     async restoreTrackedSessions(): Promise<void> {
+        if (this.leadership && !this.leadership.isLeader()) {
+            return
+        }
+
         const sessions = this.deps.getSessions().filter((session) => {
             const native = session.metadata?.native
             return session.metadata?.source === 'native-attached'
@@ -633,13 +678,8 @@ export class NativeSessionManager {
     }
 
     stop(): void {
-        for (const tracker of this.trackers.values()) {
-            if (tracker.timer) {
-                clearTimeout(tracker.timer)
-                tracker.timer = null
-            }
-        }
-        this.trackers.clear()
+        this.leadership?.stop()
+        this.stopAllTracking(false)
     }
 
     async discover(namespace: string): Promise<NativeSessionDiscoverItem[]> {
@@ -678,6 +718,8 @@ export class NativeSessionManager {
         agent?: EnabledNativeCommand
         title?: string
     }): Promise<Session> {
+        await this.ensureLeadership()
+
         const pane = await getTmuxPane(options.tmuxPane)
         if (!pane || pane.tmuxSession !== options.tmuxSession) {
             throw new Error('tmux pane not found')
@@ -730,6 +772,8 @@ export class NativeSessionManager {
         agent?: EnabledNativeCommand
         title?: string
     }): Promise<Session> {
+        await this.ensureLeadership()
+
         const cwd = options.cwd.trim()
         if (!cwd) {
             throw new Error('Directory is required')
@@ -773,6 +817,8 @@ export class NativeSessionManager {
     }
 
     async resume(sessionId: string, namespace: string, options?: { allowRestart?: boolean }): Promise<boolean> {
+        await this.ensureLeadership()
+
         const session = this.deps.getSessionByNamespace(sessionId, namespace)
         const native = session?.metadata?.native
         if (
@@ -815,6 +861,8 @@ export class NativeSessionManager {
     }
 
     async detach(sessionId: string, namespace: string): Promise<void> {
+        await this.ensureLeadership()
+
         const session = this.deps.getSessionByNamespace(sessionId, namespace)
         if (!session || session.metadata?.source !== 'native-attached') {
             throw new Error('Native session not found')
@@ -841,6 +889,8 @@ export class NativeSessionManager {
             sentFrom?: 'telegram-bot' | 'webapp'
         }
     ): Promise<void> {
+        await this.ensureLeadership()
+
         if (!payload.text.trim()) {
             return
         }
@@ -861,6 +911,7 @@ export class NativeSessionManager {
                 source: 'native-attached'
             }
         }, payload.localId ?? undefined)
+        this.rememberRecentUserInput(tracker, payload.text)
 
         tracker.thinking = true
         tracker.lastOutputAt = Date.now()
@@ -872,6 +923,8 @@ export class NativeSessionManager {
     }
 
     async interrupt(sessionId: string): Promise<void> {
+        await this.ensureLeadership()
+
         const session = this.requireNativeSession(sessionId)
         const tracker = await this.ensureTracker(session)
         await sendTmuxInterrupt(tracker.tmuxPane)
@@ -932,6 +985,8 @@ export class NativeSessionManager {
         requestId: string,
         decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort'
     ): Promise<void> {
+        await this.ensureLeadership()
+
         const session = this.requireNativeSession(sessionId)
         const tracker = await this.ensureTracker(session)
         const request = session.agentState?.requests?.[requestId]
@@ -953,6 +1008,7 @@ export class NativeSessionManager {
         requestId: string,
         decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort'
     ): Promise<void> {
+        await this.ensureLeadership()
         await this.approvePermission(sessionId, requestId, decision === 'approved_for_session' ? 'abort' : (decision ?? 'abort'))
     }
 
@@ -999,6 +1055,10 @@ export class NativeSessionManager {
         return session
     }
 
+    private async ensureLeadership(): Promise<void> {
+        await this.leadership?.ensureLeader()
+    }
+
     private async ensureTracker(session: Session): Promise<NativeTracker> {
         const existing = this.trackers.get(session.id)
         if (existing) {
@@ -1030,7 +1090,12 @@ export class NativeSessionManager {
             current.tmuxPane = pane.tmuxPane
             current.command = pane.command
             current.lastCodexSessionIdSyncAt = 0
+            current.transcript = createNativeCodexTranscriptState(session.metadata?.codexSessionId ?? current.transcript.codexSessionId)
+            current.recentUserInputs = []
+            current.lastSnapshot = await captureTmuxPane(pane.tmuxPane)
+            this.syncPermissionState(session.id, current, current.lastSnapshot)
             await this.maybeSyncCodexSessionMetadata(session.id, pane, current, true)
+            this.syncCodexTranscript(session.id, current, current.lastSnapshot)
             this.deps.handleSessionAlive({
                 sid: session.id,
                 time: Date.now(),
@@ -1050,21 +1115,20 @@ export class NativeSessionManager {
             lastCodexSessionIdSyncAt: 0,
             thinking: false,
             pendingPermission: null,
+            recentUserInputs: [],
+            transcript: createNativeCodexTranscriptState(session.metadata?.codexSessionId),
             timer: null
         }
 
         this.trackers.set(session.id, tracker)
         this.syncPermissionState(session.id, tracker, initialSnapshot)
         await this.maybeSyncCodexSessionMetadata(session.id, pane, tracker, true)
+        this.syncCodexTranscript(session.id, tracker, initialSnapshot)
         this.deps.handleSessionAlive({
             sid: session.id,
             time: Date.now(),
             thinking: false
         })
-
-        if (this.deps.getMessageCount(session.id) === 0 && initialSnapshot.trim().length > 0) {
-            this.appendAssistantOutput(session.id, initialSnapshot)
-        }
 
         this.scheduleNextPoll(session.id)
     }
@@ -1099,6 +1163,7 @@ export class NativeSessionManager {
             const nextChunk = diffCapturedTmuxOutput(tracker.lastSnapshot, snapshot)
             tracker.lastSnapshot = snapshot
             this.syncPermissionState(sessionId, tracker, snapshot)
+            const transcriptActive = this.syncCodexTranscript(sessionId, tracker, snapshot)
 
             const now = Date.now()
             if (nextChunk.length > 0) {
@@ -1109,7 +1174,9 @@ export class NativeSessionManager {
                     time: now,
                     thinking: tracker.thinking
                 })
-                this.appendAssistantOutput(sessionId, nextChunk)
+                if (!transcriptActive && pane.command !== 'codex') {
+                    this.appendAssistantOutput(sessionId, nextChunk)
+                }
             } else {
                 if (tracker.thinking && now - tracker.lastOutputAt >= THINKING_IDLE_MS) {
                     tracker.thinking = false
@@ -1150,6 +1217,13 @@ export class NativeSessionManager {
         }
     }
 
+    private stopAllTracking(markInactive: boolean): void {
+        const trackedSessionIds = Array.from(this.trackers.keys())
+        for (const sessionId of trackedSessionIds) {
+            this.stopTracking(sessionId, markInactive)
+        }
+    }
+
     private async maybeSyncCodexSessionMetadata(
         sessionId: string,
         pane: TmuxPane,
@@ -1161,10 +1235,6 @@ export class NativeSessionManager {
             return
         }
 
-        if (session.metadata.codexSessionId) {
-            return
-        }
-
         const now = Date.now()
         if (!force && now - tracker.lastCodexSessionIdSyncAt < CODEX_SESSION_ID_SYNC_INTERVAL_MS) {
             return
@@ -1172,16 +1242,25 @@ export class NativeSessionManager {
 
         tracker.lastCodexSessionIdSyncAt = now
 
-        const codexSessionId = await resolveCodexSessionIdForPane(pane.panePid, {
+        const resolvedCodexSessionId = tracker.transcript.codexSessionId ?? await resolveCodexSessionIdForPane(pane.panePid, {
             attachedAtMs: session.metadata.native?.attachedAt
         })
-        if (!codexSessionId) {
+        const nextCodexSessionId = resolvedCodexSessionId ?? session.metadata.codexSessionId
+        const nativeMetadata = session.metadata.native
+        const shouldUpdateNative = nativeMetadata
+            ? nativeMetadata.tmuxSession !== pane.tmuxSession
+                || nativeMetadata.tmuxPane !== pane.tmuxPane
+                || nativeMetadata.command !== pane.command
+                || nativeMetadata.attached === false
+            : true
+
+        if (nextCodexSessionId === session.metadata.codexSessionId && !shouldUpdateNative) {
             return
         }
 
         this.deps.updateSessionMetadata(sessionId, {
             ...session.metadata,
-            codexSessionId,
+            codexSessionId: nextCodexSessionId,
             native: {
                 ...session.metadata.native,
                 tmuxSession: pane.tmuxSession,
@@ -1190,6 +1269,52 @@ export class NativeSessionManager {
                 attached: true
             }
         }, { touchUpdatedAt: false })
+    }
+
+    private syncCodexTranscript(sessionId: string, tracker: NativeTracker, snapshot: string): boolean {
+        if (tracker.command !== 'codex') {
+            return false
+        }
+
+        const session = this.deps.getSession(sessionId)
+        if (!session?.metadata || session.metadata.source !== 'native-attached' || !session.metadata.path) {
+            return false
+        }
+
+        const result = syncNativeCodexTranscript(tracker.transcript, {
+            cwd: session.metadata.path,
+            hintedSessionId: session.metadata.codexSessionId,
+            attachedAtMs: session.metadata.native?.attachedAt,
+            snapshotText: snapshot
+        })
+
+        if (
+            result.codexSessionId
+            && result.codexSessionId !== session.metadata.codexSessionId
+        ) {
+            this.deps.updateSessionMetadata(sessionId, {
+                ...session.metadata,
+                codexSessionId: result.codexSessionId,
+                native: {
+                    ...session.metadata.native,
+                    attached: true
+                }
+            }, { touchUpdatedAt: false })
+        }
+
+        for (const message of result.messages) {
+            if (message.role === 'user') {
+                if (this.shouldSkipTranscriptUserMessage(tracker, message.text)) {
+                    continue
+                }
+                this.appendCodexTranscriptUserMessage(sessionId, message.text, message.localId)
+                continue
+            }
+
+            this.appendCodexTranscriptAgentMessage(sessionId, message.body, message.localId)
+        }
+
+        return result.active
     }
 
     private syncPermissionState(sessionId: string, tracker: NativeTracker, snapshot: string): void {
@@ -1278,6 +1403,63 @@ export class NativeSessionManager {
                 }
             }
         })
+    }
+
+    private rememberRecentUserInput(tracker: NativeTracker, text: string): void {
+        this.pruneRecentUserInputs(tracker)
+        tracker.recentUserInputs.push({
+            text: normalizeComparableText(text),
+            createdAt: Date.now()
+        })
+
+        if (tracker.recentUserInputs.length > 10) {
+            tracker.recentUserInputs.shift()
+        }
+    }
+
+    private shouldSkipTranscriptUserMessage(tracker: NativeTracker, text: string): boolean {
+        this.pruneRecentUserInputs(tracker)
+        const normalizedText = normalizeComparableText(text)
+        const matchIndex = tracker.recentUserInputs.findIndex((entry) => entry.text === normalizedText)
+        if (matchIndex < 0) {
+            return false
+        }
+
+        tracker.recentUserInputs.splice(matchIndex, 1)
+        return true
+    }
+
+    private pruneRecentUserInputs(tracker: NativeTracker): void {
+        const cutoff = Date.now() - NATIVE_TRANSCRIPT_USER_ECHO_MAX_AGE_MS
+        tracker.recentUserInputs = tracker.recentUserInputs.filter((entry) => entry.createdAt >= cutoff)
+    }
+
+    private appendCodexTranscriptUserMessage(sessionId: string, text: string, localId: string): void {
+        this.deps.appendMessage(sessionId, {
+            role: 'user',
+            content: {
+                type: 'text',
+                text
+            },
+            meta: {
+                sentFrom: 'cli',
+                source: 'native-attached'
+            }
+        }, localId)
+    }
+
+    private appendCodexTranscriptAgentMessage(sessionId: string, body: unknown, localId: string): void {
+        this.deps.appendMessage(sessionId, {
+            role: 'agent',
+            content: {
+                type: AGENT_MESSAGE_PAYLOAD_TYPE,
+                data: body
+            },
+            meta: {
+                sentFrom: 'cli',
+                source: 'native-attached'
+            }
+        }, localId)
     }
 
     private appendAssistantOutput(sessionId: string, text: string): void {
