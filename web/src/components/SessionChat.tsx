@@ -57,6 +57,7 @@ export function SessionChat(props: {
     const navigate = useNavigate()
     const sessionInactive = !props.session.active
     const terminalSupported = isRemoteTerminalSupported(props.session.metadata)
+    const isNativeSession = props.session.metadata?.source === 'native-attached'
     const normalizedCacheRef = useRef<Map<string, { source: DecryptedMessage; normalized: NormalizedMessage | null }>>(new Map())
     const blocksByIdRef = useRef<Map<string, ChatBlock>>(new Map())
     const [forceScrollToken, setForceScrollToken] = useState(0)
@@ -295,6 +296,13 @@ export function SessionChat(props: {
         })
     }, [navigate, props.session.id])
 
+    const handleSessionForked = useCallback((sessionId: string) => {
+        navigate({
+            to: '/sessions/$sessionId',
+            params: { sessionId }
+        })
+    }, [navigate])
+
     const handleViewTerminal = useCallback(() => {
         navigate({
             to: '/sessions/$sessionId/terminal',
@@ -325,11 +333,11 @@ export function SessionChat(props: {
     }, [agentFlavor, props.availableSlashCommands, props.onSend, props.session.id, addToast, haptic, t])
 
     const attachmentAdapter = useMemo(() => {
-        if (!props.session.active) {
+        if (!props.session.active || isNativeSession) {
             return undefined
         }
         return createAttachmentAdapter(props.api, props.session.id)
-    }, [props.api, props.session.id, props.session.active])
+    }, [props.api, props.session.id, props.session.active, isNativeSession])
 
     const runtime = useHappyRuntime({
         session: props.session,
@@ -346,9 +354,10 @@ export function SessionChat(props: {
             <SessionHeader
                 session={props.session}
                 onBack={props.onBack}
-                onViewFiles={props.session.metadata?.path ? handleViewFiles : undefined}
+                onViewFiles={props.session.metadata?.path && !isNativeSession ? handleViewFiles : undefined}
                 api={props.api}
                 onSessionDeleted={props.onBack}
+                onSessionForked={handleSessionForked}
             />
 
             {props.session.teamState && (
@@ -405,21 +414,21 @@ export function SessionChat(props: {
                         contextSize={reduced.latestUsage?.contextSize}
                         controlledByUser={controlledByUser}
                         onCollaborationModeChange={
-                            codexCollaborationModeSupported && props.session.active && !controlledByUser
+                            !isNativeSession && codexCollaborationModeSupported && props.session.active && !controlledByUser
                                 ? handleCollaborationModeChange
                                 : undefined
                         }
-                        onPermissionModeChange={handlePermissionModeChange}
-                        onModelChange={handleModelChange}
+                        onPermissionModeChange={!isNativeSession ? handlePermissionModeChange : undefined}
+                        onModelChange={!isNativeSession ? handleModelChange : undefined}
                         onModelReasoningEffortChange={
-                            agentFlavor === 'codex' && props.session.active && !controlledByUser
+                            !isNativeSession && agentFlavor === 'codex' && props.session.active && !controlledByUser
                                 ? handleModelReasoningEffortChange
                                 : undefined
                         }
-                        onEffortChange={handleEffortChange}
-                        onSwitchToRemote={handleSwitchToRemote}
+                        onEffortChange={!isNativeSession ? handleEffortChange : undefined}
+                        onSwitchToRemote={!isNativeSession ? handleSwitchToRemote : undefined}
                         onTerminal={props.session.active && terminalSupported ? handleViewTerminal : undefined}
-                        terminalUnsupported={props.session.active && !terminalSupported}
+                        terminalUnsupported={props.session.active && !terminalSupported && !isNativeSession}
                         autocompleteSuggestions={props.autocompleteSuggestions}
                         voiceStatus={voice?.status}
                         voiceMicMuted={voice?.micMuted}

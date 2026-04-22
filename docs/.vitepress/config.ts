@@ -20,6 +20,8 @@ export default defineConfig({
     sidebar: [
       { text: 'Quick Start', link: '/guide/quick-start' },
       { text: 'Installation', link: '/guide/installation' },
+      { text: 'Public / Tunnel Deployment', link: '/guide/tunnel-deployment' },
+      { text: 'VPS Relay Deployment', link: '/guide/vps-relay-deployment' },
       { text: 'PWA', link: '/guide/pwa' },
       { text: 'How it Works', link: '/guide/how-it-works' },
       { text: 'Cursor Agent', link: '/guide/cursor' },

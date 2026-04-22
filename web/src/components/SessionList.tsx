@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { SessionSummary } from '@/types/api'
 import type { ApiClient } from '@/api/client'
 import { useLongPress } from '@/hooks/useLongPress'
@@ -8,6 +9,8 @@ import { SessionActionMenu } from '@/components/SessionActionMenu'
 import { RenameSessionDialog } from '@/components/RenameSessionDialog'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { CopyIcon, CheckIcon } from '@/components/icons'
+import { queryKeys } from '@/lib/query-keys'
+import { useToast } from '@/lib/toast-context'
 import { useTranslation } from '@/lib/use-translation'
 
 type SessionGroup = {
@@ -356,17 +359,34 @@ function SessionItem(props: {
     const { t } = useTranslation()
     const { session: s, onSelect, showPath = true, api, selected = false } = props
     const { haptic } = usePlatform()
+    const { addToast } = useToast()
     const [menuOpen, setMenuOpen] = useState(false)
     const [menuAnchorPoint, setMenuAnchorPoint] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
     const [renameOpen, setRenameOpen] = useState(false)
     const [archiveOpen, setArchiveOpen] = useState(false)
     const [deleteOpen, setDeleteOpen] = useState(false)
 
-    const { archiveSession, renameSession, deleteSession, isPending } = useSessionActions(
+    const { archiveSession, forkSession, renameSession, deleteSession, isPending } = useSessionActions(
         api,
         s.id,
         s.metadata?.flavor ?? null
     )
+
+    const handleFork = async () => {
+        try {
+            const nextSessionId = await forkSession()
+            haptic.notification('success')
+            onSelect(nextSessionId)
+        } catch (error) {
+            haptic.notification('error')
+            addToast({
+                title: t('session.forkFailed.title'),
+                body: error instanceof Error ? error.message : t('session.forkFailed.body'),
+                sessionId: s.id,
+                url: `/sessions/${s.id}`
+            })
+        }
+    }
 
     const longPressHandlers = useLongPress({
         onLongPress: (point) => {
@@ -384,6 +404,7 @@ function SessionItem(props: {
 
     const sessionName = getSessionTitle(s)
     const todoProgress = getTodoProgress(s)
+    const isNativeSession = s.metadata?.source === 'native-attached'
     return (
         <>
             <button
@@ -399,6 +420,16 @@ function SessionItem(props: {
                         <div className={`truncate text-sm font-medium ${s.active ? 'text-[var(--app-fg)]' : 'text-[var(--app-hint)]'}`}>
                             {sessionName}
                         </div>
+                        {isNativeSession ? (
+                            <span className="shrink-0 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--app-hint)]">
+                                {t('nativeSession.badge')}
+                            </span>
+                        ) : null}
+                        {s.archived ? (
+                            <span className="shrink-0 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--app-hint)]">
+                                {t('session.badge.archived')}
+                            </span>
+                        ) : null}
                         {s.active && s.thinking ? (
                             <LoaderIcon className="h-3.5 w-3.5 shrink-0 text-[var(--app-hint)] animate-spin-slow" />
                         ) : null}
@@ -431,8 +462,9 @@ function SessionItem(props: {
                 isOpen={menuOpen}
                 onClose={() => setMenuOpen(false)}
                 sessionActive={s.active}
+                onFork={s.metadata?.path ? handleFork : undefined}
                 onRename={() => setRenameOpen(true)}
-                onArchive={() => setArchiveOpen(true)}
+                onArchive={s.archived ? undefined : () => setArchiveOpen(true)}
                 onDelete={() => setDeleteOpen(true)}
                 anchorPoint={menuAnchorPoint}
             />
@@ -482,9 +514,13 @@ export function SessionList(props: {
     api: ApiClient | null
     machineLabelsById?: Record<string, string>
     selectedSessionId?: string | null
+    emptyLabel?: string
 }) {
     const { t } = useTranslation()
     const { renderHeader = true, api, selectedSessionId, machineLabelsById = {} } = props
+    const queryClient = useQueryClient()
+    const { haptic } = usePlatform()
+    const { addToast } = useToast()
     const groups = useMemo(
         () => groupSessionsByDirectory(deduplicateSessionsByAgentId(props.sessions, selectedSessionId)),
         [props.sessions, selectedSessionId]
@@ -523,6 +559,29 @@ export function SessionList(props: {
         () => groupByMachine(groups, resolveMachineLabel),
         [groups, machineLabelsById] // eslint-disable-line react-hooks/exhaustive-deps
     )
+
+    const createInDirectoryMutation = useMutation({
+        mutationFn: async (input: { sessionId: string; directory: string }) => {
+            if (!api) {
+                throw new Error('API unavailable')
+            }
+            return await api.forkSession(input.sessionId, { directory: input.directory })
+        },
+        onSuccess: async (sessionId) => {
+            haptic.notification('success')
+            await queryClient.invalidateQueries({ queryKey: queryKeys.sessions })
+            props.onSelect(sessionId)
+        },
+        onError: (error, input) => {
+            haptic.notification('error')
+            addToast({
+                title: t('session.createInDirectoryFailed.title'),
+                body: error instanceof Error ? error.message : t('session.createInDirectoryFailed.body'),
+                sessionId: input.sessionId,
+                url: `/sessions/${input.sessionId}`
+            })
+        }
+    })
 
     const isMachineCollapsed = (mg: MachineGroup): boolean => {
         const key = `machine::${mg.machineId ?? UNKNOWN_MACHINE_ID}`
@@ -608,8 +667,13 @@ export function SessionList(props: {
                 </div>
             ) : null}
 
-            <div className="flex flex-col gap-3 px-2 pt-1 pb-2">
-                {machineGroups.map((mg) => {
+            {machineGroups.length === 0 ? (
+                <div className="px-3 py-6 text-sm text-[var(--app-hint)]">
+                    {props.emptyLabel ?? t('sessions.empty.active')}
+                </div>
+            ) : (
+                <div className="flex flex-col gap-3 px-2 pt-1 pb-2">
+                    {machineGroups.map((mg) => {
                     const machineCollapsed = isMachineCollapsed(mg)
                     return (
                         <div key={mg.machineId ?? UNKNOWN_MACHINE_ID}>
@@ -642,6 +706,27 @@ export function SessionList(props: {
                                                     <span className="font-medium text-sm truncate flex-1">
                                                         {group.displayName}
                                                     </span>
+                                                    {group.sessions[0] ? (
+                                                        <button
+                                                            type="button"
+                                                            className="opacity-70 md:opacity-0 md:group-hover/project:opacity-100 transition-opacity duration-150 shrink-0 p-0.5 rounded text-[var(--app-hint)] hover:text-[var(--app-fg)]"
+                                                            title={t('session.action.newInDirectory')}
+                                                            onClick={(event) => {
+                                                                event.stopPropagation()
+                                                                void createInDirectoryMutation.mutateAsync({
+                                                                    sessionId: group.sessions[0]!.id,
+                                                                    directory: group.directory
+                                                                })
+                                                            }}
+                                                        >
+                                                            {createInDirectoryMutation.isPending
+                                                                && createInDirectoryMutation.variables?.sessionId === group.sessions[0]!.id
+                                                                && createInDirectoryMutation.variables?.directory === group.directory
+                                                                ? <LoaderIcon className="h-3.5 w-3.5 animate-spin-slow" />
+                                                                : <PlusIcon className="h-3.5 w-3.5" />
+                                                            }
+                                                        </button>
+                                                    ) : null}
                                                     <CopyPathButton path={group.directory} className="opacity-0 group-hover/project:opacity-100 transition-opacity duration-150" />
                                                     <span className="text-[11px] tabular-nums text-[var(--app-hint)] shrink-0">
                                                         ({group.sessions.length})
@@ -673,8 +758,9 @@ export function SessionList(props: {
                             </div>
                         </div>
                     )
-                })}
-            </div>
+                    })}
+                </div>
+            )}
         </div>
     )
 }

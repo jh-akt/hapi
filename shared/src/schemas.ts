@@ -19,9 +19,24 @@ export const WorktreeMetadataSchema = z.object({
 
 export type WorktreeMetadata = z.infer<typeof WorktreeMetadataSchema>
 
+export const SessionSourceSchema = z.enum(['managed', 'native-attached'])
+
+export type SessionSource = z.infer<typeof SessionSourceSchema>
+
+export const NativeSessionMetadataSchema = z.object({
+    tmuxSession: z.string(),
+    tmuxPane: z.string(),
+    command: z.string(),
+    attachedAt: z.number(),
+    attached: z.boolean().optional()
+})
+
+export type NativeSessionMetadata = z.infer<typeof NativeSessionMetadataSchema>
+
 export const MetadataSchema = z.object({
     path: z.string(),
     host: z.string(),
+    source: SessionSourceSchema.optional(),
     version: z.string().optional(),
     name: z.string().optional(),
     os: z.string().optional(),
@@ -43,10 +58,12 @@ export const MetadataSchema = z.object({
     startedBy: z.enum(['runner', 'terminal']).optional(),
     lifecycleState: z.string().optional(),
     lifecycleStateSince: z.number().optional(),
+    archivedAt: z.number().optional(),
     archivedBy: z.string().optional(),
     archiveReason: z.string().optional(),
     flavor: z.string().nullish(),
-    worktree: WorktreeMetadataSchema.optional()
+    worktree: WorktreeMetadataSchema.optional(),
+    native: NativeSessionMetadataSchema.optional()
 })
 
 export type Metadata = z.infer<typeof MetadataSchema>

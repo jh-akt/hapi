@@ -13,6 +13,7 @@ function makeSession(overrides: Partial<SessionSummary> & { id: string }): Sessi
         pendingRequestsCount: 0,
         model: null,
         effort: null,
+        archived: false,
         ...overrides
     }
 }

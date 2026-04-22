@@ -329,6 +329,148 @@ describe('session model', () => {
         }
     })
 
+    it('forks native sessions by creating a new native tmux session in the requested directory', async () => {
+        const store = new Store(':memory:')
+        const engine = new SyncEngine(
+            store,
+            {} as never,
+            new RpcRegistry(),
+            { broadcast() {} } as never
+        )
+
+        try {
+            const session = engine.getOrCreateSession(
+                'session-native-fork',
+                {
+                    path: '/tmp/project',
+                    host: 'localhost',
+                    flavor: 'codex',
+                    source: 'native-attached',
+                    native: {
+                        tmuxSession: 'hapi-project',
+                        tmuxPane: '%1',
+                        command: 'codex',
+                        attachedAt: Date.now()
+                    }
+                },
+                null,
+                'default'
+            )
+
+            let capturedNamespace: string | undefined
+            let capturedCwd: string | undefined
+            ;(engine as any).nativeSessions.create = async (options: { namespace: string; cwd: string }) => {
+                capturedNamespace = options.namespace
+                capturedCwd = options.cwd
+                return { id: 'session-native-forked' }
+            }
+
+            const result = await engine.forkSession(session.id, 'default', { directory: '/tmp/project/subdir' })
+
+            expect(result).toEqual({ type: 'success', sessionId: 'session-native-forked' })
+            expect(capturedNamespace).toBe('default')
+            expect(capturedCwd).toBe('/tmp/project/subdir')
+        } finally {
+            engine.stop()
+        }
+    })
+
+    it('forks managed sessions with the stored agent configuration', async () => {
+        const store = new Store(':memory:')
+        const engine = new SyncEngine(
+            store,
+            {} as never,
+            new RpcRegistry(),
+            { broadcast() {} } as never
+        )
+
+        try {
+            const session = engine.getOrCreateSession(
+                'session-managed-fork',
+                {
+                    path: '/tmp/project',
+                    host: 'localhost',
+                    machineId: 'machine-1',
+                    flavor: 'codex',
+                    codexSessionId: 'codex-thread-1'
+                },
+                null,
+                'default',
+                'gpt-5.4',
+                undefined,
+                'high'
+            )
+            session.permissionMode = 'plan'
+
+            engine.getOrCreateMachine(
+                'machine-1',
+                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                null,
+                'default'
+            )
+            engine.handleMachineAlive({ machineId: 'machine-1', time: Date.now() })
+
+            let capturedArgs: unknown[] = []
+            ;(engine as any).rpcGateway.spawnSession = async (...args: unknown[]) => {
+                capturedArgs = args
+                return { type: 'success', sessionId: 'session-managed-forked' }
+            }
+
+            const result = await engine.forkSession(session.id, 'default', { directory: '/tmp/project/subdir' })
+
+            expect(result).toEqual({ type: 'success', sessionId: 'session-managed-forked' })
+            expect(capturedArgs).toEqual([
+                'machine-1',
+                '/tmp/project/subdir',
+                'codex',
+                'gpt-5.4',
+                'high',
+                undefined,
+                'simple',
+                undefined,
+                undefined,
+                undefined,
+                'plan'
+            ])
+        } finally {
+            engine.stop()
+        }
+    })
+
+    it('marks archived sessions in summaries and restores them when they become active again', () => {
+        const store = new Store(':memory:')
+        const events: SyncEvent[] = []
+        const cache = new SessionCache(store, createPublisher(events))
+
+        const session = cache.getOrCreateSession(
+            'session-archive-summary',
+            {
+                path: '/tmp/project',
+                host: 'localhost',
+                flavor: 'codex'
+            },
+            null,
+            'default'
+        )
+
+        cache.updateSessionMetadata(session.id, {
+            ...session.metadata,
+            archivedAt: Date.now(),
+            archivedBy: 'user',
+            archiveReason: 'manual'
+        }, { touchUpdatedAt: false })
+
+        expect(toSessionSummary(cache.getSession(session.id)!).archived).toBe(true)
+
+        cache.handleSessionAlive({ sid: session.id, time: Date.now(), thinking: false })
+
+        const restored = cache.getSession(session.id)
+        expect(restored?.metadata?.archivedAt).toBeUndefined()
+        expect(restored?.metadata?.archivedBy).toBeUndefined()
+        expect(restored?.metadata?.archiveReason).toBeUndefined()
+        expect(toSessionSummary(restored!).archived).toBe(false)
+    })
+
     it('passes the stored model reasoning effort when respawning a resumed Codex session', async () => {
         const store = new Store(':memory:')
         const engine = new SyncEngine(

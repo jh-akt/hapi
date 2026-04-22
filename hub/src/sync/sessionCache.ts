@@ -1,5 +1,6 @@
+import { isSessionArchivedMetadata } from '@hapi/protocol'
 import { AgentStateSchema, MetadataSchema, TeamStateSchema } from '@hapi/protocol/schemas'
-import type { CodexCollaborationMode, PermissionMode, Session } from '@hapi/protocol/types'
+import type { CodexCollaborationMode, Metadata, PermissionMode, Session } from '@hapi/protocol/types'
 import type { Store } from '../store'
 import { clampAliveTime } from './aliveTime'
 import { EventPublisher } from './eventPublisher'
@@ -171,8 +172,31 @@ export class SessionCache {
         const t = clampAliveTime(payload.time)
         if (!t) return
 
-        const session = this.sessions.get(payload.sid) ?? this.refreshSession(payload.sid)
+        let session = this.sessions.get(payload.sid) ?? this.refreshSession(payload.sid)
         if (!session) return
+
+        let emitFullSessionUpdate = false
+        if (isSessionArchivedMetadata(session.metadata)) {
+            const metadata = clearSessionArchivedMetadata(session.metadata)
+            const result = this.store.sessions.updateSessionMetadata(
+                session.id,
+                metadata,
+                session.metadataVersion,
+                session.namespace,
+                { touchUpdatedAt: false }
+            )
+
+            if (result.result === 'success') {
+                session.metadata = metadata
+                session.metadataVersion = result.version
+                emitFullSessionUpdate = true
+            } else if (result.result === 'version-mismatch') {
+                session = this.refreshSession(payload.sid)
+                if (!session) {
+                    return
+                }
+            }
+        }
 
         const wasActive = session.active
         const wasThinking = session.thinking
@@ -229,7 +253,14 @@ export class SessionCache {
             || modeChanged
             || (now - lastBroadcastAt > 10_000)
 
-        if (shouldBroadcast) {
+        if (emitFullSessionUpdate) {
+            this.lastBroadcastAtBySessionId.set(session.id, now)
+            this.publisher.emit({
+                type: 'session-updated',
+                sessionId: session.id,
+                data: session
+            })
+        } else if (shouldBroadcast) {
             this.lastBroadcastAtBySessionId.set(session.id, now)
             this.publisher.emit({
                 type: 'session-updated',
@@ -354,6 +385,59 @@ export class SessionCache {
         }
 
         this.publisher.emit({ type: 'session-updated', sessionId, data: session })
+    }
+
+    updateSessionMetadata(
+        sessionId: string,
+        metadata: unknown,
+        options?: { touchUpdatedAt?: boolean }
+    ): Session {
+        const session = this.sessions.get(sessionId) ?? this.refreshSession(sessionId)
+        if (!session) {
+            throw new Error('Session not found')
+        }
+
+        const result = this.store.sessions.updateSessionMetadata(
+            sessionId,
+            metadata,
+            session.metadataVersion,
+            session.namespace,
+            options
+        )
+
+        if (result.result === 'error') {
+            throw new Error('Failed to update session metadata')
+        }
+
+        if (result.result === 'version-mismatch') {
+            throw new Error('Session was modified concurrently. Please try again.')
+        }
+
+        return this.refreshSession(sessionId) ?? (() => { throw new Error('Failed to reload session metadata') })()
+    }
+
+    updateSessionAgentState(sessionId: string, agentState: unknown): Session {
+        const session = this.sessions.get(sessionId) ?? this.refreshSession(sessionId)
+        if (!session) {
+            throw new Error('Session not found')
+        }
+
+        const result = this.store.sessions.updateSessionAgentState(
+            sessionId,
+            agentState,
+            session.agentStateVersion,
+            session.namespace
+        )
+
+        if (result.result === 'error') {
+            throw new Error('Failed to update session agent state')
+        }
+
+        if (result.result === 'version-mismatch') {
+            throw new Error('Session was modified concurrently. Please try again.')
+        }
+
+        return this.refreshSession(sessionId) ?? (() => { throw new Error('Failed to reload session agent state') })()
     }
 
     async renameSession(sessionId: string, name: string): Promise<void> {
@@ -717,5 +801,18 @@ export class SessionCache {
             this.deduplicateInProgress.delete(agentId.value)
             this.deduplicatePending.delete(agentId.value)
         }
+    }
+}
+
+function clearSessionArchivedMetadata(metadata: Metadata | null | undefined): Metadata {
+    if (!metadata) {
+        return { path: '', host: '' }
+    }
+
+    return {
+        ...metadata,
+        archivedAt: undefined,
+        archivedBy: undefined,
+        archiveReason: undefined
     }
 }

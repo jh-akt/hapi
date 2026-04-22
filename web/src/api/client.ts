@@ -10,6 +10,8 @@ import type {
     MachinePathsExistsResponse,
     MachinesResponse,
     MessagesResponse,
+    NativeSessionAttachResponse,
+    NativeSessionsResponse,
     PermissionMode,
     PushSubscriptionPayload,
     PushUnsubscribePayload,
@@ -299,6 +301,17 @@ export class ApiClient {
         })
     }
 
+    async forkSession(sessionId: string, options?: { directory?: string }): Promise<string> {
+        const response = await this.request<{ sessionId: string }>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/fork`,
+            {
+                method: 'POST',
+                body: JSON.stringify(options ?? {})
+            }
+        )
+        return response.sessionId
+    }
+
     async switchSession(sessionId: string): Promise<void> {
         await this.request(`/api/sessions/${encodeURIComponent(sessionId)}/switch`, {
             method: 'POST',
@@ -375,6 +388,40 @@ export class ApiClient {
 
     async getMachines(): Promise<MachinesResponse> {
         return await this.request<MachinesResponse>('/api/machines')
+    }
+
+    async discoverNativeSessions(): Promise<NativeSessionsResponse> {
+        return await this.request<NativeSessionsResponse>('/api/native-sessions/discover')
+    }
+
+    async attachNativeSession(payload: {
+        tmuxSession: string
+        tmuxPane: string
+        agent?: 'codex'
+        title?: string
+    }): Promise<NativeSessionAttachResponse> {
+        return await this.request<NativeSessionAttachResponse>('/api/native-sessions/attach', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        })
+    }
+
+    async createNativeSession(payload: {
+        cwd: string
+        agent?: 'codex'
+        title?: string
+    }): Promise<NativeSessionAttachResponse> {
+        return await this.request<NativeSessionAttachResponse>('/api/native-sessions/create', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        })
+    }
+
+    async detachNativeSession(sessionId: string): Promise<void> {
+        await this.request(`/api/native-sessions/${encodeURIComponent(sessionId)}/detach`, {
+            method: 'POST',
+            body: JSON.stringify({})
+        })
     }
 
     async checkMachinePathsExists(

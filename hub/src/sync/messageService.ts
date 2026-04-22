@@ -63,6 +63,44 @@ export class MessageService {
         }))
     }
 
+    appendMessage(sessionId: string, content: unknown, localId?: string | null): DecryptedMessage {
+        const msg = this.store.messages.addMessage(sessionId, content, localId ?? undefined)
+
+        const update = {
+            id: msg.id,
+            seq: msg.seq,
+            createdAt: msg.createdAt,
+            body: {
+                t: 'new-message' as const,
+                sid: sessionId,
+                message: {
+                    id: msg.id,
+                    seq: msg.seq,
+                    createdAt: msg.createdAt,
+                    localId: msg.localId,
+                    content: msg.content
+                }
+            }
+        }
+        this.io.of('/cli').to(`session:${sessionId}`).emit('update', update)
+
+        const decrypted: DecryptedMessage = {
+            id: msg.id,
+            seq: msg.seq,
+            localId: msg.localId,
+            content: msg.content,
+            createdAt: msg.createdAt
+        }
+
+        this.publisher.emit({
+            type: 'message-received',
+            sessionId,
+            message: decrypted
+        })
+
+        return decrypted
+    }
+
     async sendMessage(
         sessionId: string,
         payload: {
@@ -86,36 +124,6 @@ export class MessageService {
             }
         }
 
-        const msg = this.store.messages.addMessage(sessionId, content, payload.localId ?? undefined)
-
-        const update = {
-            id: msg.id,
-            seq: msg.seq,
-            createdAt: msg.createdAt,
-            body: {
-                t: 'new-message' as const,
-                sid: sessionId,
-                message: {
-                    id: msg.id,
-                    seq: msg.seq,
-                    createdAt: msg.createdAt,
-                    localId: msg.localId,
-                    content: msg.content
-                }
-            }
-        }
-        this.io.of('/cli').to(`session:${sessionId}`).emit('update', update)
-
-        this.publisher.emit({
-            type: 'message-received',
-            sessionId,
-            message: {
-                id: msg.id,
-                seq: msg.seq,
-                localId: msg.localId,
-                content: msg.content,
-                createdAt: msg.createdAt
-            }
-        })
+        this.appendMessage(sessionId, content, payload.localId ?? undefined)
     }
 }

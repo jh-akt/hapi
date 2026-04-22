@@ -247,6 +247,10 @@ Each machine gets a unique ID stored in `~/.hapi/settings.json`. This allows:
 
 If you prefer not to use the public relay (e.g., for lower latency or self-managed infrastructure), you can use these alternatives:
 
+For a step-by-step source deployment workflow, including a managed local hub script and native `tmux + codex` attach, see [Public / Tunnel Deployment](./tunnel-deployment.md).
+
+If your local machine has no public IP and you want a VPS to terminate HTTPS and relay traffic back home over SSH, see [VPS Relay Deployment](./vps-relay-deployment.md).
+
 <details>
 <summary>Cloudflare Tunnel</summary>
 

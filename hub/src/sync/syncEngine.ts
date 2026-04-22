@@ -7,11 +7,13 @@
  * - No E2E encryption; data is stored as JSON in SQLite
  */
 
+import { isSessionArchivedMetadata } from '@hapi/protocol'
 import type { CodexCollaborationMode, DecryptedMessage, PermissionMode, Session, SyncEvent } from '@hapi/protocol/types'
 import type { Server } from 'socket.io'
 import type { Store } from '../store'
 import type { RpcRegistry } from '../socket/rpcRegistry'
 import type { SSEManager } from '../sse/sseManager'
+import { NativeSessionManager, type NativeSessionDiscoverItem } from '../native/sessionManager'
 import { EventPublisher, type SyncEventListener } from './eventPublisher'
 import { MachineCache, type Machine } from './machineCache'
 import { MessageService } from './messageService'
@@ -42,12 +44,18 @@ export type ResumeSessionResult =
     | { type: 'success'; sessionId: string }
     | { type: 'error'; message: string; code: 'session_not_found' | 'access_denied' | 'no_machine_online' | 'resume_unavailable' | 'resume_failed' }
 
+export type ForkSessionResult =
+    | { type: 'success'; sessionId: string }
+    | { type: 'error'; message: string; code: 'session_not_found' | 'access_denied' | 'no_machine_online' | 'fork_unavailable' | 'fork_failed' }
+
 export class SyncEngine {
+    private readonly store: Store
     private readonly eventPublisher: EventPublisher
     private readonly sessionCache: SessionCache
     private readonly machineCache: MachineCache
     private readonly messageService: MessageService
     private readonly rpcGateway: RpcGateway
+    private readonly nativeSessions: NativeSessionManager
     private inactivityTimer: NodeJS.Timeout | null = null
 
     constructor(
@@ -56,12 +64,27 @@ export class SyncEngine {
         rpcRegistry: RpcRegistry,
         sseManager: SSEManager
     ) {
+        this.store = store
         this.eventPublisher = new EventPublisher(sseManager, (event) => this.resolveNamespace(event))
         this.sessionCache = new SessionCache(store, this.eventPublisher)
         this.machineCache = new MachineCache(store, this.eventPublisher)
         this.messageService = new MessageService(store, io, this.eventPublisher)
         this.rpcGateway = new RpcGateway(io, rpcRegistry)
         this.reloadAll()
+        this.nativeSessions = new NativeSessionManager({
+            getSessions: () => this.sessionCache.getSessions(),
+            getSessionsByNamespace: (namespace) => this.sessionCache.getSessionsByNamespace(namespace),
+            getSession: (sessionId) => this.getSession(sessionId),
+            getSessionByNamespace: (sessionId, namespace) => this.getSessionByNamespace(sessionId, namespace),
+            getOrCreateSession: (...args) => this.sessionCache.getOrCreateSession(...args),
+            updateSessionMetadata: (sessionId, metadata, options) => this.sessionCache.updateSessionMetadata(sessionId, metadata, options),
+            updateSessionAgentState: (sessionId, agentState) => this.sessionCache.updateSessionAgentState(sessionId, agentState),
+            appendMessage: (sessionId, content, localId) => this.messageService.appendMessage(sessionId, content, localId),
+            getMessageCount: (sessionId) => this.store.messages.getMessages(sessionId, 1).length,
+            handleSessionAlive: (payload) => this.handleSessionAlive(payload),
+            handleSessionEnd: (payload) => this.handleSessionEnd(payload)
+        })
+        void this.nativeSessions.restoreTrackedSessions()
         this.inactivityTimer = setInterval(() => this.expireInactive(), 5_000)
     }
 
@@ -70,6 +93,7 @@ export class SyncEngine {
             clearInterval(this.inactivityTimer)
             this.inactivityTimer = null
         }
+        this.nativeSessions.stop()
     }
 
     subscribe(listener: SyncEventListener): () => void {
@@ -127,6 +151,48 @@ export class SyncEngine {
 
     getMachinesByNamespace(namespace: string): Machine[] {
         return this.machineCache.getMachinesByNamespace(namespace)
+    }
+
+    async discoverNativeSessions(namespace: string): Promise<NativeSessionDiscoverItem[]> {
+        return await this.nativeSessions.discover(namespace)
+    }
+
+    async attachNativeSession(
+        namespace: string,
+        payload: {
+            tmuxSession: string
+            tmuxPane: string
+            agent?: 'codex'
+            title?: string
+        }
+    ): Promise<Session> {
+        return await this.nativeSessions.attach({
+            namespace,
+            tmuxSession: payload.tmuxSession,
+            tmuxPane: payload.tmuxPane,
+            agent: payload.agent,
+            title: payload.title
+        })
+    }
+
+    async createNativeSession(
+        namespace: string,
+        payload: {
+            cwd: string
+            agent?: 'codex'
+            title?: string
+        }
+    ): Promise<Session> {
+        return await this.nativeSessions.create({
+            namespace,
+            cwd: payload.cwd,
+            agent: payload.agent,
+            title: payload.title
+        })
+    }
+
+    async detachNativeSession(sessionId: string, namespace: string): Promise<void> {
+        await this.nativeSessions.detach(sessionId, namespace)
     }
 
     getMachine(machineId: string): Machine | undefined {
@@ -271,6 +337,19 @@ export class SyncEngine {
             sentFrom?: 'telegram-bot' | 'webapp'
         }
     ): Promise<void> {
+        const session = this.getSession(sessionId)
+        if (session?.metadata?.source === 'native-attached') {
+            if (payload.attachments && payload.attachments.length > 0) {
+                throw new Error('Native sessions do not support attachments yet')
+            }
+            await this.nativeSessions.sendInput(sessionId, {
+                text: payload.text,
+                localId: payload.localId,
+                sentFrom: payload.sentFrom
+            })
+            return
+        }
+
         await this.messageService.sendMessage(sessionId, payload)
     }
 
@@ -282,6 +361,15 @@ export class SyncEngine {
         decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort',
         answers?: Record<string, string[]> | Record<string, { answers: string[] }>
     ): Promise<void> {
+        const session = this.getSession(sessionId)
+        if (session?.metadata?.source === 'native-attached') {
+            if (mode !== undefined || allowTools !== undefined || answers !== undefined) {
+                throw new Error('Native Codex approvals currently support decision-only responses')
+            }
+            await this.nativeSessions.approvePermission(sessionId, requestId, decision)
+            return
+        }
+
         await this.rpcGateway.approvePermission(sessionId, requestId, mode, allowTools, decision, answers)
     }
 
@@ -290,16 +378,155 @@ export class SyncEngine {
         requestId: string,
         decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort'
     ): Promise<void> {
+        const session = this.getSession(sessionId)
+        if (session?.metadata?.source === 'native-attached') {
+            await this.nativeSessions.denyPermission(sessionId, requestId, decision)
+            return
+        }
+
         await this.rpcGateway.denyPermission(sessionId, requestId, decision)
     }
 
     async abortSession(sessionId: string): Promise<void> {
+        const session = this.getSession(sessionId)
+        if (session?.metadata?.source === 'native-attached') {
+            await this.nativeSessions.interrupt(sessionId)
+            return
+        }
+
         await this.rpcGateway.abortSession(sessionId)
     }
 
     async archiveSession(sessionId: string): Promise<void> {
-        await this.rpcGateway.killSession(sessionId)
-        this.handleSessionEnd({ sid: sessionId, time: Date.now() })
+        const session = this.getSession(sessionId)
+        if (!session) {
+            throw new Error('Session not found')
+        }
+
+        if (session.metadata?.source === 'native-attached') {
+            if (session.metadata.native?.attached !== false) {
+                await this.nativeSessions.detach(sessionId, session.namespace)
+            }
+            this.markSessionArchived(sessionId)
+            return
+        }
+
+        if (session.active) {
+            await this.rpcGateway.killSession(sessionId)
+            this.handleSessionEnd({ sid: sessionId, time: Date.now() })
+        }
+
+        this.markSessionArchived(sessionId)
+    }
+
+    async forkSession(
+        sessionId: string,
+        namespace: string,
+        options?: {
+            directory?: string
+        }
+    ): Promise<ForkSessionResult> {
+        const access = this.sessionCache.resolveSessionAccess(sessionId, namespace)
+        if (!access.ok) {
+            return {
+                type: 'error',
+                message: access.reason === 'access-denied' ? 'Session access denied' : 'Session not found',
+                code: access.reason === 'access-denied' ? 'access_denied' : 'session_not_found'
+            }
+        }
+
+        const session = access.session
+        const metadata = session.metadata
+        const directory = options?.directory?.trim() || metadata?.path?.trim()
+        if (!metadata || !directory) {
+            return { type: 'error', message: 'Session path unavailable', code: 'fork_unavailable' }
+        }
+
+        if (metadata.source === 'native-attached') {
+            try {
+                const forked = await this.nativeSessions.create({
+                    namespace,
+                    cwd: directory,
+                    agent: 'codex'
+                })
+
+                return { type: 'success', sessionId: forked.id }
+            } catch (error) {
+                return {
+                    type: 'error',
+                    message: error instanceof Error ? error.message : 'Failed to fork native session',
+                    code: 'fork_failed'
+                }
+            }
+        }
+
+        const onlineMachines = this.machineCache.getOnlineMachinesByNamespace(namespace)
+        if (onlineMachines.length === 0) {
+            return { type: 'error', message: 'No machine online', code: 'no_machine_online' }
+        }
+
+        const targetMachine = (() => {
+            if (metadata.machineId) {
+                const exact = onlineMachines.find((machine) => machine.id === metadata.machineId)
+                if (exact) {
+                    return exact
+                }
+            }
+
+            if (metadata.host) {
+                const hostMatch = onlineMachines.find((machine) => machine.metadata?.host === metadata.host)
+                if (hostMatch) {
+                    return hostMatch
+                }
+            }
+
+            return onlineMachines[0] ?? null
+        })()
+
+        if (!targetMachine) {
+            return { type: 'error', message: 'No machine online', code: 'no_machine_online' }
+        }
+
+        const flavor = metadata.flavor === 'codex'
+            || metadata.flavor === 'cursor'
+            || metadata.flavor === 'gemini'
+            || metadata.flavor === 'opencode'
+            ? metadata.flavor
+            : 'claude'
+
+        const spawnResult = await this.rpcGateway.spawnSession(
+            targetMachine.id,
+            directory,
+            flavor,
+            session.model ?? undefined,
+            flavor === 'codex' ? (session.modelReasoningEffort ?? undefined) : undefined,
+            undefined,
+            'simple',
+            undefined,
+            undefined,
+            flavor === 'claude' ? (session.effort ?? undefined) : undefined,
+            session.permissionMode
+        )
+
+        if (spawnResult.type === 'error') {
+            return { type: 'error', message: spawnResult.message, code: 'fork_failed' }
+        }
+
+        return spawnResult
+    }
+
+    private markSessionArchived(sessionId: string): void {
+        const session = this.getSession(sessionId)
+        if (!session?.metadata || isSessionArchivedMetadata(session.metadata)) {
+            return
+        }
+
+        this.sessionCache.updateSessionMetadata(sessionId, {
+            ...session.metadata,
+            archivedAt: Date.now(),
+            archivedBy: 'user',
+            archiveReason: 'manual'
+        }, { touchUpdatedAt: false })
     }
 
     async switchSession(sessionId: string, to: 'remote' | 'local'): Promise<void> {
@@ -385,6 +612,14 @@ export class SyncEngine {
 
         const session = access.session
         if (session.active) {
+            return { type: 'success', sessionId: access.sessionId }
+        }
+
+        if (session.metadata?.source === 'native-attached') {
+            const resumed = await this.nativeSessions.resume(access.sessionId, namespace, { allowRestart: true })
+            if (!resumed) {
+                return { type: 'error', message: 'Native session is unavailable', code: 'resume_unavailable' }
+            }
             return { type: 'success', sessionId: access.sessionId }
         }
 

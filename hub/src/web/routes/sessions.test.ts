@@ -133,6 +133,97 @@ describe('sessions routes', () => {
         ])
     })
 
+    it('forks a session with an optional target directory', async () => {
+        const session = createSession()
+        const forkCalls: Array<{ sessionId: string; namespace: string; directory?: string }> = []
+        const engine = {
+            resolveSessionAccess: () => ({ ok: true, sessionId: session.id, session }),
+            applySessionConfig: async () => {},
+            forkSession: async (sessionId: string, namespace: string, options?: { directory?: string }) => {
+                forkCalls.push({ sessionId, namespace, directory: options?.directory })
+                return { type: 'success', sessionId: 'session-2' } as const
+            }
+        } as Partial<SyncEngine>
+
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => {
+            c.set('namespace', 'default')
+            await next()
+        })
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/sessions/session-1/fork', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ directory: '/tmp/project/subdir' })
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ sessionId: 'session-2' })
+        expect(forkCalls).toEqual([
+            { sessionId: 'session-1', namespace: 'default', directory: '/tmp/project/subdir' }
+        ])
+    })
+
+    it('maps no-machine-online fork failures to 503', async () => {
+        const session = createSession()
+        const engine = {
+            resolveSessionAccess: () => ({ ok: true, sessionId: session.id, session }),
+            applySessionConfig: async () => {},
+            forkSession: async () => ({
+                type: 'error',
+                code: 'no_machine_online',
+                message: 'No machine online'
+            } as const)
+        } as Partial<SyncEngine>
+
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => {
+            c.set('namespace', 'default')
+            await next()
+        })
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/sessions/session-1/fork', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({})
+        })
+
+        expect(response.status).toBe(503)
+        expect(await response.json()).toEqual({
+            error: 'No machine online',
+            code: 'no_machine_online'
+        })
+    })
+
+    it('archives inactive sessions too', async () => {
+        const session = createSession({ active: false })
+        const archiveCalls: string[] = []
+        const engine = {
+            resolveSessionAccess: () => ({ ok: true, sessionId: session.id, session }),
+            applySessionConfig: async () => {},
+            archiveSession: async (sessionId: string) => {
+                archiveCalls.push(sessionId)
+            }
+        } as Partial<SyncEngine>
+
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => {
+            c.set('namespace', 'default')
+            await next()
+        })
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/sessions/session-1/archive', {
+            method: 'POST'
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ ok: true })
+        expect(archiveCalls).toEqual(['session-1'])
+    })
+
     it('rejects model reasoning effort changes for non-Codex sessions', async () => {
         const session = createSession({
             metadata: {

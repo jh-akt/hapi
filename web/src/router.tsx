@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
     Navigate,
@@ -15,6 +15,7 @@ import { App } from '@/App'
 import { SessionChat } from '@/components/SessionChat'
 import { SessionList } from '@/components/SessionList'
 import { NewSession } from '@/components/NewSession'
+import { NativeSessionAttach } from '@/components/NativeSessionAttach'
 import { LoadingState } from '@/components/LoadingState'
 import { useAppContext } from '@/lib/app-context'
 import { useAppGoBack } from '@/hooks/useAppGoBack'
@@ -109,6 +110,7 @@ function SessionsPage() {
     const pathname = useLocation({ select: location => location.pathname })
     const matchRoute = useMatchRoute()
     const { t } = useTranslation()
+    const [showArchived, setShowArchived] = useState(false)
     const { sessions, isLoading, error, refetch } = useSessions(api)
     const { machines } = useMachines(api, true)
 
@@ -116,9 +118,17 @@ function SessionsPage() {
         void refetch()
     }, [refetch])
 
-    const projectCount = useMemo(() => new Set(sessions.map(s =>
+    const archivedCount = useMemo(
+        () => sessions.filter((session) => session.archived).length,
+        [sessions]
+    )
+    const visibleSessions = useMemo(
+        () => sessions.filter((session) => showArchived ? session.archived : !session.archived),
+        [sessions, showArchived]
+    )
+    const projectCount = useMemo(() => new Set(visibleSessions.map(s =>
         s.metadata?.worktree?.basePath ?? s.metadata?.path ?? 'Other'
-    )).size, [sessions])
+    )).size, [visibleSessions])
     const machineLabelsById = useMemo(() => {
         const labels: Record<string, string> = {}
         for (const machine of machines) {
@@ -140,9 +150,19 @@ function SessionsPage() {
                 <div className="bg-[var(--app-bg)] pt-[env(safe-area-inset-top)]">
                     <div className="mx-auto w-full max-w-content flex items-center justify-between px-3 py-2">
                         <div className="text-xs text-[var(--app-hint)]">
-                            {t('sessions.count', { n: sessions.length, m: projectCount })}
+                            {t('sessions.count', { n: visibleSessions.length, m: projectCount })}
                         </div>
                         <div className="flex items-center gap-2">
+                            {archivedCount > 0 || showArchived ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowArchived((value) => !value)}
+                                    className={`rounded-full px-2.5 py-1 text-xs transition-colors ${showArchived ? 'bg-[var(--app-secondary-bg)] text-[var(--app-fg)]' : 'text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]'}`}
+                                    title={showArchived ? t('sessions.showActive') : t('sessions.showArchived', { n: archivedCount })}
+                                >
+                                    {showArchived ? t('sessions.showActive') : t('sessions.showArchived', { n: archivedCount })}
+                                </button>
+                            ) : null}
                             <button
                                 type="button"
                                 onClick={() => navigate({ to: '/settings' })}
@@ -170,7 +190,7 @@ function SessionsPage() {
                         </div>
                     ) : null}
                     <SessionList
-                        sessions={sessions}
+                        sessions={visibleSessions}
                         selectedSessionId={selectedSessionId}
                         onSelect={(sessionId) => navigate({
                             to: '/sessions/$sessionId',
@@ -182,6 +202,7 @@ function SessionsPage() {
                         renderHeader={false}
                         api={api}
                         machineLabelsById={machineLabelsById}
+                        emptyLabel={showArchived ? t('sessions.empty.archived') : t('sessions.empty.active')}
                     />
                 </div>
             </div>
@@ -368,6 +389,7 @@ function NewSessionPage() {
     const queryClient = useQueryClient()
     const { machines, isLoading: machinesLoading, error: machinesError } = useMachines(api, true)
     const { t } = useTranslation()
+    const hasMachines = machines.length > 0
 
     const handleCancel = useCallback(() => {
         navigate({ to: '/sessions' })
@@ -411,11 +433,23 @@ function NewSessionPage() {
                     </div>
                 ) : null}
 
-                <NewSession
+                {hasMachines ? (
+                    <NewSession
+                        api={api}
+                        machines={machines}
+                        isLoading={machinesLoading}
+                        onCancel={handleCancel}
+                        onSuccess={handleSuccess}
+                    />
+                ) : !machinesLoading ? (
+                    <div className="px-3 py-4">
+                        <div className="rounded-md border border-dashed border-[var(--app-border)] px-3 py-4 text-sm text-[var(--app-hint)]">
+                            {t('newSession.noMachinesNativeHint')}
+                        </div>
+                    </div>
+                ) : null}
+                <NativeSessionAttach
                     api={api}
-                    machines={machines}
-                    isLoading={machinesLoading}
-                    onCancel={handleCancel}
                     onSuccess={handleSuccess}
                 />
             </div>

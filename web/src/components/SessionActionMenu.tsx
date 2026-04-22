@@ -13,8 +13,9 @@ type SessionActionMenuProps = {
     isOpen: boolean
     onClose: () => void
     sessionActive: boolean
+    onFork?: () => void
     onRename: () => void
-    onArchive: () => void
+    onArchive?: () => void
     onDelete: () => void
     anchorPoint: { x: number; y: number }
     menuId?: string
@@ -61,6 +62,29 @@ function ArchiveIcon(props: { className?: string }) {
     )
 }
 
+function ForkIcon(props: { className?: string }) {
+    return (
+        <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={props.className}
+        >
+            <circle cx="6" cy="6" r="2" />
+            <circle cx="18" cy="6" r="2" />
+            <circle cx="18" cy="18" r="2" />
+            <path d="M8 6h6a4 4 0 0 1 4 4v6" />
+            <path d="M8 6v0" />
+        </svg>
+    )
+}
+
 function TrashIcon(props: { className?: string }) {
     return (
         <svg
@@ -96,6 +120,7 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
         isOpen,
         onClose,
         sessionActive,
+        onFork,
         onRename,
         onArchive,
         onDelete,
@@ -113,9 +138,14 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
         onRename()
     }
 
+    const handleFork = () => {
+        onClose()
+        onFork?.()
+    }
+
     const handleArchive = () => {
         onClose()
-        onArchive()
+        onArchive?.()
     }
 
     const handleDelete = () => {
@@ -239,7 +269,19 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
                     {t('session.action.rename')}
                 </button>
 
-                {sessionActive ? (
+                {onFork ? (
+                    <button
+                        type="button"
+                        role="menuitem"
+                        className={`${baseItemClassName} hover:bg-[var(--app-subtle-bg)]`}
+                        onClick={handleFork}
+                    >
+                        <ForkIcon className="text-[var(--app-hint)]" />
+                        {t('session.action.fork')}
+                    </button>
+                ) : null}
+
+                {onArchive ? (
                     <button
                         type="button"
                         role="menuitem"
@@ -249,7 +291,9 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
                         <ArchiveIcon className="text-red-500" />
                         {t('session.action.archive')}
                     </button>
-                ) : (
+                ) : null}
+
+                {!sessionActive ? (
                     <button
                         type="button"
                         role="menuitem"
@@ -259,7 +303,7 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
                         <TrashIcon className="text-red-500" />
                         {t('session.action.delete')}
                     </button>
-                )}
+                ) : null}
             </div>
         </div>
     )

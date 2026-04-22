@@ -1,7 +1,9 @@
 import type {
     DecryptedMessage as ProtocolDecryptedMessage,
+    NativeSessionMetadata,
     Session,
     SessionSummary,
+    SessionSource,
     SyncEvent as ProtocolSyncEvent,
     WorktreeMetadata
 } from '@hapi/protocol/types'
@@ -10,10 +12,12 @@ export type {
     AgentState,
     AttachmentMetadata,
     CodexCollaborationMode,
+    NativeSessionMetadata,
     PermissionMode,
     Session,
     SessionSummary,
     SessionSummaryMetadata,
+    SessionSource,
     TeamMember,
     TeamMessage,
     TeamState,
@@ -32,6 +36,8 @@ export type SessionMetadataSummary = {
     machineId?: string
     tools?: string[]
     flavor?: string | null
+    source?: SessionSource
+    native?: NativeSessionMetadata
     worktree?: WorktreeMetadata
 }
 
@@ -94,6 +100,15 @@ export type MessagesResponse = {
 
 export type MachinesResponse = { machines: Machine[] }
 export type MachinePathsExistsResponse = { exists: Record<string, boolean> }
+export type NativeSessionCandidate = {
+    tmuxSession: string
+    tmuxPane: string
+    cwd: string
+    command: 'codex'
+    sessionId?: string
+}
+export type NativeSessionsResponse = { sessions: NativeSessionCandidate[] }
+export type NativeSessionAttachResponse = { sessionId: string }
 
 export type SpawnResponse =
     | { type: 'success'; sessionId: string }

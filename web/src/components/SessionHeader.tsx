@@ -8,6 +8,8 @@ import { RenameSessionDialog } from '@/components/RenameSessionDialog'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { getSessionModelLabel } from '@/lib/sessionModelLabel'
 import { useTranslation } from '@/lib/use-translation'
+import { usePlatform } from '@/hooks/usePlatform'
+import { useToast } from '@/lib/toast-context'
 
 function getSessionTitle(session: Session): string {
     if (session.metadata?.name) {
@@ -66,12 +68,17 @@ export function SessionHeader(props: {
     onViewFiles?: () => void
     api: ApiClient | null
     onSessionDeleted?: () => void
+    onSessionForked?: (sessionId: string) => void
 }) {
     const { t } = useTranslation()
+    const { haptic } = usePlatform()
+    const { addToast } = useToast()
     const { session, api, onSessionDeleted } = props
     const title = useMemo(() => getSessionTitle(session), [session])
     const worktreeBranch = session.metadata?.worktree?.branch
     const modelLabel = getSessionModelLabel(session)
+    const isNativeSession = session.metadata?.source === 'native-attached'
+    const isArchivedSession = Boolean(session.metadata?.archivedAt ?? session.metadata?.archivedBy ?? session.metadata?.archiveReason)
 
     const [menuOpen, setMenuOpen] = useState(false)
     const [menuAnchorPoint, setMenuAnchorPoint] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
@@ -81,11 +88,32 @@ export function SessionHeader(props: {
     const [archiveOpen, setArchiveOpen] = useState(false)
     const [deleteOpen, setDeleteOpen] = useState(false)
 
-    const { archiveSession, renameSession, deleteSession, isPending } = useSessionActions(
+    const { archiveSession, forkSession, renameSession, deleteSession, isPending } = useSessionActions(
         api,
         session.id,
         session.metadata?.flavor ?? null
     )
+
+    const handleFork = async () => {
+        try {
+            const nextSessionId = await forkSession()
+            haptic.notification('success')
+            props.onSessionForked?.(nextSessionId)
+        } catch (error) {
+            haptic.notification('error')
+            addToast({
+                title: t('session.forkFailed.title'),
+                body: error instanceof Error ? error.message : t('session.forkFailed.body'),
+                sessionId: session.id,
+                url: `/sessions/${session.id}`
+            })
+        }
+    }
+
+    const handleArchive = async () => {
+        await archiveSession()
+        props.onBack()
+    }
 
     const handleDelete = async () => {
         await deleteSession()
@@ -140,6 +168,12 @@ export function SessionHeader(props: {
                                 <span aria-hidden="true">❖</span>
                                 {session.metadata?.flavor?.trim() || 'unknown'}
                             </span>
+                            {isNativeSession ? (
+                                <span>{t('nativeSession.badge')}</span>
+                            ) : null}
+                            {isArchivedSession ? (
+                                <span>{t('session.badge.archived')}</span>
+                            ) : null}
                             {modelLabel ? (
                                 <span>
                                     {t(modelLabel.key)}: {modelLabel.value}
@@ -182,8 +216,9 @@ export function SessionHeader(props: {
                 isOpen={menuOpen}
                 onClose={() => setMenuOpen(false)}
                 sessionActive={session.active}
+                onFork={session.metadata?.path ? handleFork : undefined}
                 onRename={() => setRenameOpen(true)}
-                onArchive={() => setArchiveOpen(true)}
+                onArchive={isArchivedSession ? undefined : () => setArchiveOpen(true)}
                 onDelete={() => setDeleteOpen(true)}
                 anchorPoint={menuAnchorPoint}
                 menuId={menuId}
@@ -204,7 +239,7 @@ export function SessionHeader(props: {
                 description={t('dialog.archive.description', { name: title })}
                 confirmLabel={t('dialog.archive.confirm')}
                 confirmingLabel={t('dialog.archive.confirming')}
-                onConfirm={archiveSession}
+                onConfirm={handleArchive}
                 isPending={isPending}
                 destructive
             />

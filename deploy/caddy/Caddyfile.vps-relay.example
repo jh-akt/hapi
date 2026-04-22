@@ -1,0 +1,9 @@
+hapi.example.com {
+    encode zstd gzip
+
+    reverse_proxy 127.0.0.1:33006 {
+        health_uri /health
+        header_up X-Forwarded-Host {host}
+        header_up X-Forwarded-Proto https
+    }
+}

@@ -41,8 +41,13 @@ export default {
   // Sessions page
   'sessions.count': '{n} 个会话，{m} 个项目',
   'sessions.new': '新建会话',
+  'sessions.showArchived': '归档（{n}）',
+  'sessions.showActive': '进行中',
+  'sessions.empty.active': '还没有会话。',
+  'sessions.empty.archived': '还没有归档会话。',
 
   // Session list
+  'session.badge.archived': '已归档',
   'session.item.path': '路径',
   'session.item.agent': '代理',
   'session.item.model': '模型',
@@ -60,7 +65,9 @@ export default {
 
   // Session actions
   'session.action.rename': '重命名',
+  'session.action.fork': 'Fork 会话',
   'session.action.archive': '归档',
+  'session.action.newInDirectory': '在此新建会话',
   'session.action.delete': '删除',
   'session.action.copy': '复制',
 
@@ -72,9 +79,13 @@ export default {
   'dialog.rename.error': '重命名失败，请重试。',
 
   'dialog.archive.title': '归档会话',
-  'dialog.archive.description': '确定要归档 "{name}" 吗？这将断开活动会话。',
+  'dialog.archive.description': '确定要归档 "{name}" 吗？归档后会从默认列表隐藏，活动中的会话会先断开。',
   'dialog.archive.confirm': '归档',
   'dialog.archive.confirming': '归档中…',
+  'session.forkFailed.title': 'Fork 会话失败',
+  'session.forkFailed.body': '无法基于当前会话创建新会话。',
+  'session.createInDirectoryFailed.title': '创建会话失败',
+  'session.createInDirectoryFailed.body': '无法在该目录下创建新会话。',
 
   'dialog.delete.title': '删除会话',
   'dialog.delete.description': '确定要删除 "{name}" 吗？此操作无法撤销。',
@@ -113,6 +124,26 @@ export default {
   'newSession.yolo.desc': '启动时使用危险的代理标志。',
   'newSession.create': '创建',
   'newSession.creating': '创建中…',
+  'newSession.noMachinesNativeHint': '当前没有在线 runner 机器。你仍然可以在下方附着 tmux 中已运行的 codex pane，这会创建一个 HAPI 原生会话。',
+  'nativeSession.title': '附着原生会话',
+  'nativeSession.description': '复用 tmux 里已经在跑的 codex pane，并为它创建一个 HAPI 原生会话。',
+  'nativeSession.createTitle': '创建新的原生会话',
+  'nativeSession.createDescription': '在指定目录里新建 tmux 会话并启动 codex，然后自动附着到 HAPI。',
+  'nativeSession.directoryLabel': '目录',
+  'nativeSession.directoryPlaceholder': '/path/to/project',
+  'nativeSession.titleLabel': '名称（可选）',
+  'nativeSession.titlePlaceholder': 'project-name',
+  'nativeSession.refresh': '刷新',
+  'nativeSession.loading': '正在发现 tmux pane…',
+  'nativeSession.loadError': '发现原生会话失败。',
+  'nativeSession.empty': '没有发现可附着的 codex tmux pane。',
+  'nativeSession.create': '创建原生会话',
+  'nativeSession.creating': '创建中…',
+  'nativeSession.attach': '附着已有 pane',
+  'nativeSession.attaching': '附着中…',
+  'nativeSession.attached': '已附着',
+  'nativeSession.open': '打开',
+  'nativeSession.badge': '原生',
 
   // Spawn session (old component)
   'spawn.title': '创建会话',
