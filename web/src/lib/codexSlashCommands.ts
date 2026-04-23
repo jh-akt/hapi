@@ -1,4 +1,4 @@
-import type { SlashCommand } from '@/types/api'
+import type { CodexReviewStartParams, SlashCommand } from '@/types/api'
 
 const BUILTIN_COMMANDS: Record<string, SlashCommand[]> = {
     claude: [
@@ -11,9 +11,9 @@ const BUILTIN_COMMANDS: Record<string, SlashCommand[]> = {
         { name: 'stats', description: 'Show your Claude Code usage statistics and activity', source: 'builtin' },
         { name: 'status', description: 'Show Claude Code status including version, model, account, and API connectivity', source: 'builtin' },
     ],
-    // Codex remote turns send slash-prefixed input as plain text to app-server.
-    // Hide built-ins here until remote slash command execution is implemented end-to-end.
-    codex: [],
+    codex: [
+        { name: 'review', description: 'Run Codex automated review on current changes', source: 'builtin' },
+    ],
     gemini: [
         { name: 'about', description: 'Show version info', source: 'builtin' },
         { name: 'clear', description: 'Clear the screen and conversation history', source: 'builtin' },
@@ -24,7 +24,6 @@ const BUILTIN_COMMANDS: Record<string, SlashCommand[]> = {
 }
 
 const UNSUPPORTED_CODEX_BUILTIN_COMMANDS = new Set([
-    'review',
     'new',
     'compat',
     'undo',
@@ -55,4 +54,25 @@ export function findUnsupportedCodexBuiltinSlashCommand(
     )
 
     return hasCustomCommand ? null : commandName
+}
+
+export function parseCodexReviewSlashCommand(text: string): CodexReviewStartParams | null {
+    const match = /^\s*\/review(?:\s+([\s\S]*))?$/i.exec(text)
+    if (!match) {
+        return null
+    }
+
+    const rawInstructions = match[1]?.trim() ?? ''
+    if (rawInstructions.length === 0) {
+        return {
+            target: { type: 'uncommittedChanges' }
+        }
+    }
+
+    return {
+        target: {
+            type: 'custom',
+            instructions: rawInstructions
+        }
+    }
 }

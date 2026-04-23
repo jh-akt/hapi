@@ -21,6 +21,21 @@ import { MessageService } from './messageService'
 import {
     RpcGateway,
     type RpcCommandResponse,
+    type RpcCodexReviewStartParams,
+    type RpcCodexReviewStartResponse,
+    type RpcCodexThreadActionParams,
+    type RpcCodexThreadArchiveResponse,
+    type RpcCodexThreadForkParams,
+    type RpcCodexThreadForkResponse,
+    type RpcCodexThreadListParams,
+    type RpcCodexThreadListResponse,
+    type RpcCodexThreadReadParams,
+    type RpcCodexThreadReadResponse,
+    type RpcCodexThreadRollbackParams,
+    type RpcCodexThreadRollbackResponse,
+    type RpcCodexThreadUnarchiveResponse,
+    type RpcCodexTurnSteerParams,
+    type RpcCodexTurnSteerResponse,
     type RpcDeleteUploadResponse,
     type RpcListDirectoryResponse,
     type RpcPathExistsResponse,
@@ -34,6 +49,21 @@ export type { Machine } from './machineCache'
 export type { SyncEventListener } from './eventPublisher'
 export type {
     RpcCommandResponse,
+    RpcCodexReviewStartParams,
+    RpcCodexReviewStartResponse,
+    RpcCodexThreadActionParams,
+    RpcCodexThreadArchiveResponse,
+    RpcCodexThreadForkParams,
+    RpcCodexThreadForkResponse,
+    RpcCodexThreadListParams,
+    RpcCodexThreadListResponse,
+    RpcCodexThreadReadParams,
+    RpcCodexThreadReadResponse,
+    RpcCodexThreadRollbackParams,
+    RpcCodexThreadRollbackResponse,
+    RpcCodexThreadUnarchiveResponse,
+    RpcCodexTurnSteerParams,
+    RpcCodexTurnSteerResponse,
     RpcDeleteUploadResponse,
     RpcListDirectoryResponse,
     RpcPathExistsResponse,
@@ -48,6 +78,15 @@ export type ResumeSessionResult =
 export type ForkSessionResult =
     | { type: 'success'; sessionId: string }
     | { type: 'error'; message: string; code: 'session_not_found' | 'access_denied' | 'no_machine_online' | 'fork_unavailable' | 'fork_failed' }
+
+export type ProjectRecord = {
+    id: string
+    namespace: string
+    path: string
+    name: string | null
+    createdAt: number
+    updatedAt: number
+}
 
 export type SyncEngineOptions = {
     nativeLeadership?: NativeLeadershipOptions
@@ -127,6 +166,14 @@ export class SyncEngine {
         return this.sessionCache.getSessionsByNamespace(namespace)
     }
 
+    getProjectsByNamespace(namespace: string): ProjectRecord[] {
+        return this.store.projects.getProjectsByNamespace(namespace)
+    }
+
+    createProject(namespace: string, input: { path: string; name?: string }): ProjectRecord {
+        return this.store.projects.upsertProject(namespace, input.path, input.name)
+    }
+
     getSession(sessionId: string): Session | undefined {
         return this.sessionCache.getSession(sessionId) ?? this.sessionCache.refreshSession(sessionId) ?? undefined
     }
@@ -199,6 +246,22 @@ export class SyncEngine {
 
     async detachNativeSession(sessionId: string, namespace: string): Promise<void> {
         await this.nativeSessions.detach(sessionId, namespace)
+    }
+
+    async openCodexSession(
+        namespace: string,
+        payload: {
+            cwd: string
+            codexSessionId: string
+            title?: string
+        }
+    ): Promise<Session> {
+        return await this.nativeSessions.openCodexSession({
+            namespace,
+            cwd: payload.cwd,
+            codexSessionId: payload.codexSessionId,
+            title: payload.title
+        })
     }
 
     getMachine(machineId: string): Machine | undefined {
@@ -622,7 +685,16 @@ export class SyncEngine {
         }
 
         if (session.metadata?.source === 'native-attached') {
-            const resumed = await this.nativeSessions.resume(access.sessionId, namespace, { allowRestart: true })
+            let resumed = false
+            try {
+                resumed = await this.nativeSessions.resume(access.sessionId, namespace, { allowRestart: true })
+            } catch (error) {
+                return {
+                    type: 'error',
+                    message: error instanceof Error ? error.message : 'Native session resume failed',
+                    code: 'resume_failed'
+                }
+            }
             if (!resumed) {
                 return { type: 'error', message: 'Native session is unavailable', code: 'resume_unavailable' }
             }
@@ -743,6 +815,38 @@ export class SyncEngine {
             await new Promise((resolve) => setTimeout(resolve, 250))
         }
         return false
+    }
+
+    async listCodexThreads(sessionId: string, params: RpcCodexThreadListParams = {}): Promise<RpcCodexThreadListResponse> {
+        return await this.rpcGateway.listCodexThreads(sessionId, params)
+    }
+
+    async readCodexThread(sessionId: string, params: RpcCodexThreadReadParams): Promise<RpcCodexThreadReadResponse> {
+        return await this.rpcGateway.readCodexThread(sessionId, params)
+    }
+
+    async forkCodexThread(sessionId: string, params: RpcCodexThreadForkParams): Promise<RpcCodexThreadForkResponse> {
+        return await this.rpcGateway.forkCodexThread(sessionId, params)
+    }
+
+    async archiveCodexThread(sessionId: string, params: RpcCodexThreadActionParams): Promise<RpcCodexThreadArchiveResponse> {
+        return await this.rpcGateway.archiveCodexThread(sessionId, params)
+    }
+
+    async unarchiveCodexThread(sessionId: string, params: RpcCodexThreadActionParams): Promise<RpcCodexThreadUnarchiveResponse> {
+        return await this.rpcGateway.unarchiveCodexThread(sessionId, params)
+    }
+
+    async rollbackCodexThread(sessionId: string, params: RpcCodexThreadRollbackParams): Promise<RpcCodexThreadRollbackResponse> {
+        return await this.rpcGateway.rollbackCodexThread(sessionId, params)
+    }
+
+    async steerCodexTurn(sessionId: string, params: RpcCodexTurnSteerParams): Promise<RpcCodexTurnSteerResponse> {
+        return await this.rpcGateway.steerCodexTurn(sessionId, params)
+    }
+
+    async startCodexReview(sessionId: string, params: RpcCodexReviewStartParams): Promise<RpcCodexReviewStartResponse> {
+        return await this.rpcGateway.startCodexReview(sessionId, params)
     }
 
     async checkPathsExist(machineId: string, paths: string[]): Promise<Record<string, boolean>> {

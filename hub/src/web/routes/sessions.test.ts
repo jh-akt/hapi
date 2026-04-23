@@ -224,6 +224,114 @@ describe('sessions routes', () => {
         expect(archiveCalls).toEqual(['session-1'])
     })
 
+    it('rejects codex app-server routes for local Codex sessions', async () => {
+        const session = createSession({
+            agentState: {
+                controlledByUser: true,
+                requests: {},
+                completedRequests: {}
+            }
+        })
+        const { app } = createApp(session)
+
+        const response = await app.request('/api/sessions/session-1/codex/threads/list', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({})
+        })
+
+        expect(response.status).toBe(409)
+        expect(await response.json()).toEqual({
+            error: 'Codex app-server actions are only supported for remote Codex sessions'
+        })
+    })
+
+    it('lists codex threads for remote Codex sessions', async () => {
+        const session = createSession()
+        const listCalls: Array<{ sessionId: string; params: Record<string, unknown> }> = []
+        const engine = {
+            resolveSessionAccess: () => ({ ok: true, sessionId: session.id, session }),
+            applySessionConfig: async () => {},
+            listCodexThreads: async (sessionId: string, params: Record<string, unknown>) => {
+                listCalls.push({ sessionId, params })
+                return {
+                    data: [{ id: 'thr_1', name: 'Thread 1' }],
+                    nextCursor: null,
+                    backwardsCursor: null
+                }
+            }
+        } as Partial<SyncEngine>
+
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => {
+            c.set('namespace', 'default')
+            await next()
+        })
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/sessions/session-1/codex/threads/list', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ archived: true, useStateDbOnly: true })
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({
+            data: [{ id: 'thr_1', name: 'Thread 1' }],
+            nextCursor: null,
+            backwardsCursor: null
+        })
+        expect(listCalls).toEqual([{
+            sessionId: 'session-1',
+            params: { archived: true, useStateDbOnly: true }
+        }])
+    })
+
+    it('starts codex review for remote Codex sessions', async () => {
+        const session = createSession()
+        const reviewCalls: Array<{ sessionId: string; params: Record<string, unknown> }> = []
+        const engine = {
+            resolveSessionAccess: () => ({ ok: true, sessionId: session.id, session }),
+            applySessionConfig: async () => {},
+            startCodexReview: async (sessionId: string, params: Record<string, unknown>) => {
+                reviewCalls.push({ sessionId, params })
+                return {
+                    turn: { id: 'turn-review' },
+                    reviewThreadId: 'thr_review'
+                }
+            }
+        } as Partial<SyncEngine>
+
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => {
+            c.set('namespace', 'default')
+            await next()
+        })
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/sessions/session-1/codex/review', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                target: { type: 'uncommittedChanges' },
+                delivery: 'detached'
+            })
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({
+            turn: { id: 'turn-review' },
+            reviewThreadId: 'thr_review'
+        })
+        expect(reviewCalls).toEqual([{
+            sessionId: 'session-1',
+            params: {
+                target: { type: 'uncommittedChanges' },
+                delivery: 'detached'
+            }
+        }])
+    })
+
     it('rejects model reasoning effort changes for non-Codex sessions', async () => {
         const session = createSession({
             metadata: {

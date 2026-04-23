@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ApiClient } from '@/api/client'
 import { usePlatform } from '@/hooks/usePlatform'
+import { normalizeProjectPath } from '@/lib/project-path'
 import { queryKeys } from '@/lib/query-keys'
 import { useTranslation } from '@/lib/use-translation'
 import { Badge } from '@/components/ui/badge'
@@ -19,6 +20,7 @@ function getDisplayName(path: string): string {
 export function NativeSessionAttach(props: {
     api: ApiClient | null
     onSuccess: (sessionId: string) => void
+    onProjectCreated?: (projectPath: string) => void
 }) {
     const queryClient = useQueryClient()
     const { haptic } = usePlatform()
@@ -40,24 +42,39 @@ export function NativeSessionAttach(props: {
 
     const createMutation = useMutation({
         mutationFn: async (payload: {
-            cwd: string
-            agent: 'codex'
-            title?: string
+            path: string
+            name?: string
         }) => {
             if (!props.api) {
                 throw new Error('API unavailable')
             }
-            return await props.api.createNativeSession(payload)
+            return await props.api.createProject(payload)
         },
-        onSuccess: async ({ sessionId }) => {
+        onSuccess: async ({ project, nativeSession }) => {
             haptic.notification('success')
             setCwd('')
             setTitle('')
             await Promise.all([
-                queryClient.invalidateQueries({ queryKey: queryKeys.sessions }),
+                queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+                queryClient.invalidateQueries({ queryKey: queryKeys.codexSessions }),
                 queryClient.invalidateQueries({ queryKey: queryKeys.nativeSessions })
             ])
-            props.onSuccess(sessionId)
+
+            if (nativeSession?.sessionId) {
+                props.onSuccess(nativeSession.sessionId)
+                return
+            }
+
+            if (nativeSession) {
+                await attachMutation.mutateAsync({
+                    tmuxSession: nativeSession.tmuxSession,
+                    tmuxPane: nativeSession.tmuxPane,
+                    agent: nativeSession.command
+                }).catch(() => undefined)
+                return
+            }
+
+            props.onProjectCreated?.(project.path)
         },
         onError: () => {
             haptic.notification('error')
@@ -80,6 +97,7 @@ export function NativeSessionAttach(props: {
         onSuccess: async ({ sessionId }) => {
             haptic.notification('success')
             await Promise.all([
+                queryClient.invalidateQueries({ queryKey: queryKeys.codexSessions }),
                 queryClient.invalidateQueries({ queryKey: queryKeys.sessions }),
                 queryClient.invalidateQueries({ queryKey: queryKeys.nativeSessions })
             ])
@@ -162,9 +180,8 @@ export function NativeSessionAttach(props: {
                                     disabled={createMutation.isPending || trimmedCwd.length === 0}
                                     onClick={() => {
                                         void createMutation.mutateAsync({
-                                            cwd: trimmedCwd,
-                                            agent: 'codex',
-                                            title: trimmedTitle || undefined
+                                            path: normalizeProjectPath(trimmedCwd),
+                                            name: trimmedTitle || undefined
                                         })
                                     }}
                                 >

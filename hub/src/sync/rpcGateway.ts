@@ -44,6 +44,177 @@ export type RpcPathExistsResponse = {
     exists: Record<string, boolean>
 }
 
+export type RpcCodexThreadStatus =
+    | { type: 'notLoaded' }
+    | { type: 'idle' }
+    | { type: 'systemError' }
+    | { type: 'active'; activeFlags: string[] }
+
+export type RpcCodexTurn = {
+    id: string
+    items?: unknown[]
+    status?: string | Record<string, unknown>
+    error?: Record<string, unknown> | null
+    startedAt?: number | null
+    completedAt?: number | null
+    durationMs?: number | null
+    [key: string]: unknown
+}
+
+export type RpcCodexThread = {
+    id: string
+    forkedFromId?: string | null
+    preview?: string
+    ephemeral?: boolean
+    modelProvider?: string
+    createdAt?: number
+    updatedAt?: number
+    status?: RpcCodexThreadStatus
+    path?: string | null
+    cwd?: string
+    cliVersion?: string
+    source?: string | Record<string, unknown>
+    agentNickname?: string | null
+    agentRole?: string | null
+    gitInfo?: Record<string, unknown> | null
+    name?: string | null
+    turns?: RpcCodexTurn[]
+    [key: string]: unknown
+}
+
+export type RpcCodexThreadSortKey = 'created_at' | 'updated_at'
+export type RpcCodexSortDirection = 'asc' | 'desc'
+export type RpcCodexThreadSourceKind =
+    | 'cli'
+    | 'vscode'
+    | 'exec'
+    | 'appServer'
+    | 'subAgent'
+    | 'subAgentReview'
+    | 'subAgentCompact'
+    | 'subAgentThreadSpawn'
+    | 'subAgentOther'
+    | 'unknown'
+
+export type RpcCodexThreadListParams = {
+    cursor?: string | null
+    limit?: number | null
+    sortKey?: RpcCodexThreadSortKey | null
+    sortDirection?: RpcCodexSortDirection | null
+    modelProviders?: string[] | null
+    sourceKinds?: RpcCodexThreadSourceKind[] | null
+    archived?: boolean | null
+    cwd?: string | string[] | null
+    useStateDbOnly?: boolean
+    searchTerm?: string | null
+}
+
+export type RpcCodexThreadListResponse = {
+    data: RpcCodexThread[]
+    nextCursor: string | null
+    backwardsCursor: string | null
+}
+
+export type RpcCodexThreadReadParams = {
+    threadId?: string | null
+    includeTurns?: boolean
+}
+
+export type RpcCodexThreadReadResponse = {
+    thread: RpcCodexThread
+}
+
+export type RpcCodexThreadForkParams = {
+    threadId?: string | null
+    path?: string | null
+    model?: string | null
+    modelProvider?: string | null
+    cwd?: string | null
+    approvalPolicy?: 'untrusted' | 'on-failure' | 'on-request' | 'never' | null
+    sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access' | null
+    config?: Record<string, unknown> | null
+    baseInstructions?: string | null
+    developerInstructions?: string | null
+    ephemeral?: boolean
+    excludeTurns?: boolean
+    persistExtendedHistory?: boolean
+}
+
+export type RpcCodexThreadForkResponse = {
+    thread: RpcCodexThread
+    model: string
+    modelProvider: string
+    cwd: string
+    instructionSources?: string[]
+    reasoningEffort?: string | null
+    [key: string]: unknown
+}
+
+export type RpcCodexThreadActionParams = {
+    threadId?: string | null
+}
+
+export type RpcCodexThreadArchiveResponse = Record<string, never>
+
+export type RpcCodexThreadUnarchiveResponse = {
+    thread: RpcCodexThread
+}
+
+export type RpcCodexThreadRollbackParams = {
+    threadId?: string | null
+    numTurns: number
+}
+
+export type RpcCodexThreadRollbackResponse = {
+    thread: RpcCodexThread
+}
+
+export type RpcCodexUserInput =
+    | { type: 'text'; text: string; textElements?: Array<Record<string, unknown>>; text_elements?: Array<Record<string, unknown>> }
+    | { type: 'image'; url: string }
+    | { type: 'localImage'; path: string }
+    | { type: 'skill'; name: string; path: string }
+    | { type: 'mention'; name: string; path: string }
+
+export type RpcCodexTurnSteerParams = {
+    threadId?: string | null
+    input: RpcCodexUserInput[]
+    expectedTurnId?: string | null
+}
+
+export type RpcCodexTurnSteerResponse = {
+    turnId: string
+}
+
+export type RpcCodexReviewTarget =
+    | { type: 'uncommittedChanges' }
+    | { type: 'baseBranch'; branch: string }
+    | { type: 'commit'; sha: string; title: string | null }
+    | { type: 'custom'; instructions: string }
+
+export type RpcCodexReviewStartParams = {
+    threadId?: string | null
+    target: RpcCodexReviewTarget
+    delivery?: 'inline' | 'detached' | null
+}
+
+export type RpcCodexReviewStartResponse = {
+    turn: RpcCodexTurn
+    reviewThreadId: string
+}
+
+type RpcCodexAppServerMethod =
+    | 'thread/list'
+    | 'thread/read'
+    | 'thread/fork'
+    | 'thread/archive'
+    | 'thread/unarchive'
+    | 'thread/rollback'
+    | 'turn/steer'
+    | 'review/start'
+
+const CODEX_APP_SERVER_RPC_METHOD = 'codex-app-server'
+
 export class RpcGateway {
     constructor(
         private readonly io: Server,
@@ -232,8 +403,48 @@ export class RpcGateway {
         }
     }
 
+    async listCodexThreads(sessionId: string, params: RpcCodexThreadListParams = {}): Promise<RpcCodexThreadListResponse> {
+        return await this.codexAppServerRpc(sessionId, 'thread/list', params) as RpcCodexThreadListResponse
+    }
+
+    async readCodexThread(sessionId: string, params: RpcCodexThreadReadParams): Promise<RpcCodexThreadReadResponse> {
+        return await this.codexAppServerRpc(sessionId, 'thread/read', params) as RpcCodexThreadReadResponse
+    }
+
+    async forkCodexThread(sessionId: string, params: RpcCodexThreadForkParams): Promise<RpcCodexThreadForkResponse> {
+        return await this.codexAppServerRpc(sessionId, 'thread/fork', params) as RpcCodexThreadForkResponse
+    }
+
+    async archiveCodexThread(sessionId: string, params: RpcCodexThreadActionParams): Promise<RpcCodexThreadArchiveResponse> {
+        return await this.codexAppServerRpc(sessionId, 'thread/archive', params) as RpcCodexThreadArchiveResponse
+    }
+
+    async unarchiveCodexThread(sessionId: string, params: RpcCodexThreadActionParams): Promise<RpcCodexThreadUnarchiveResponse> {
+        return await this.codexAppServerRpc(sessionId, 'thread/unarchive', params) as RpcCodexThreadUnarchiveResponse
+    }
+
+    async rollbackCodexThread(sessionId: string, params: RpcCodexThreadRollbackParams): Promise<RpcCodexThreadRollbackResponse> {
+        return await this.codexAppServerRpc(sessionId, 'thread/rollback', params) as RpcCodexThreadRollbackResponse
+    }
+
+    async steerCodexTurn(sessionId: string, params: RpcCodexTurnSteerParams): Promise<RpcCodexTurnSteerResponse> {
+        return await this.codexAppServerRpc(sessionId, 'turn/steer', params) as RpcCodexTurnSteerResponse
+    }
+
+    async startCodexReview(sessionId: string, params: RpcCodexReviewStartParams): Promise<RpcCodexReviewStartResponse> {
+        return await this.codexAppServerRpc(sessionId, 'review/start', params) as RpcCodexReviewStartResponse
+    }
+
     private async sessionRpc(sessionId: string, method: string, params: unknown): Promise<unknown> {
         return await this.rpcCall(`${sessionId}:${method}`, params)
+    }
+
+    private async codexAppServerRpc(
+        sessionId: string,
+        method: RpcCodexAppServerMethod,
+        params: unknown
+    ): Promise<unknown> {
+        return await this.sessionRpc(sessionId, CODEX_APP_SERVER_RPC_METHOD, { method, params })
     }
 
     private async machineRpc(machineId: string, method: string, params: unknown): Promise<unknown> {

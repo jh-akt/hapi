@@ -16,6 +16,7 @@ type SessionActionMenuProps = {
     onFork?: () => void
     onRename: () => void
     onArchive?: () => void
+    onUnarchive?: () => void
     onDelete: () => void
     anchorPoint: { x: number; y: number }
     menuId?: string
@@ -123,6 +124,7 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
         onFork,
         onRename,
         onArchive,
+        onUnarchive,
         onDelete,
         anchorPoint,
         menuId
@@ -146,6 +148,11 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
     const handleArchive = () => {
         onClose()
         onArchive?.()
+    }
+
+    const handleUnarchive = () => {
+        onClose()
+        onUnarchive?.()
     }
 
     const handleDelete = () => {
@@ -278,6 +285,18 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
                     >
                         <ForkIcon className="text-[var(--app-hint)]" />
                         {t('session.action.fork')}
+                    </button>
+                ) : null}
+
+                {onUnarchive ? (
+                    <button
+                        type="button"
+                        role="menuitem"
+                        className={`${baseItemClassName} hover:bg-[var(--app-subtle-bg)]`}
+                        onClick={handleUnarchive}
+                    >
+                        <ArchiveIcon className="text-[var(--app-hint)]" />
+                        {t('session.action.unarchive')}
                     </button>
                 ) : null}
 

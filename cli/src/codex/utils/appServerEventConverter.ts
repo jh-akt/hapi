@@ -266,6 +266,16 @@ export class AppServerEventConverter {
             return events;
         }
 
+        if (method === 'thread/archived' || method === 'thread/unarchived') {
+            const thread = asRecord(paramsRecord.thread) ?? paramsRecord;
+            const threadId = asString(thread.threadId ?? thread.thread_id ?? thread.id);
+            events.push({
+                type: method === 'thread/archived' ? 'thread_archived' : 'thread_unarchived',
+                ...(threadId ? { thread_id: threadId } : {})
+            });
+            return events;
+        }
+
         if (method === 'turn/started') {
             const turn = asRecord(paramsRecord.turn) ?? paramsRecord;
             const turnId = asString(turn.turnId ?? turn.turn_id ?? turn.id);
@@ -417,6 +427,28 @@ export class AppServerEventConverter {
                         this.reasoningBuffers.delete(itemId);
                     }
                     this.lastReasoningDeltaByItemId.delete(itemId);
+                }
+                return events;
+            }
+
+            if (itemType === 'enteredreviewmode') {
+                if (method === 'item/started') {
+                    const review = asString(item.review);
+                    events.push({
+                        type: 'review_started',
+                        ...(review ? { review } : {})
+                    });
+                }
+                return events;
+            }
+
+            if (itemType === 'exitedreviewmode') {
+                if (method === 'item/completed') {
+                    const review = asString(item.review);
+                    events.push({
+                        type: 'review_completed',
+                        ...(review ? { review } : {})
+                    });
                 }
                 return events;
             }

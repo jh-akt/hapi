@@ -7,6 +7,7 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const base = process.env.VITE_BASE_URL || '/'
 const hubTarget = process.env.VITE_HUB_PROXY || 'http://127.0.0.1:3006'
+const buildId = process.env.HAPI_BUILD_ID || new Date().toISOString()
 
 function getVendorChunkName(id: string): string | undefined {
     if (!id.includes('/node_modules/')) {
@@ -35,6 +36,7 @@ function getVendorChunkName(id: string): string | undefined {
 export default defineConfig({
     define: {
         __APP_VERSION__: JSON.stringify(require('../cli/package.json').version),
+        __APP_BUILD_ID__: JSON.stringify(buildId),
     },
     server: {
         host: true,

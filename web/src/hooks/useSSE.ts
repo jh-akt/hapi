@@ -312,6 +312,7 @@ export function useSSE(options: {
             const tasks: Array<Promise<unknown>> = []
             if (shouldInvalidateSessions) {
                 tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.sessions }))
+                tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.codexSessions }))
             }
             for (const sessionId of sessionIds) {
                 tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) }))

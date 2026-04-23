@@ -131,4 +131,31 @@ describe('SyncEngine native permission routing', () => {
         })
         expect(resumeNative).toHaveBeenCalledWith(nativeSession.id, 'default', { allowRestart: true })
     })
+
+    it('returns a structured native resume failure when tmux resume throws', async () => {
+        const nativeSession = {
+            ...createNativeSession(),
+            active: false,
+            metadata: {
+                ...createNativeSession().metadata,
+                codexSessionId: '019db6cc-6755-76f0-bd5d-074e3428b87f'
+            }
+        }
+        const engine = {
+            sessionCache: {
+                resolveSessionAccess: () => ({ ok: true, sessionId: nativeSession.id, session: nativeSession })
+            },
+            nativeSessions: {
+                resume: mock(async () => {
+                    throw new Error('Failed to create tmux session for native resume')
+                })
+            }
+        } as unknown as SyncEngine
+
+        await expect(SyncEngine.prototype.resumeSession.call(engine, nativeSession.id, 'default')).resolves.toEqual({
+            type: 'error',
+            message: 'Failed to create tmux session for native resume',
+            code: 'resume_failed'
+        })
+    })
 })

@@ -93,6 +93,19 @@ export function getEventPresentation(event: AgentEvent): EventPresentation {
     if (event.type === 'message') {
         return { icon: null, text: typeof event.message === 'string' ? event.message : 'Message' }
     }
+    if (event.type === 'review-started') {
+        const review = typeof event.review === 'string' && event.review.length > 0 ? event.review : null
+        return { icon: '🔍', text: review ? `Review started: ${review}` : 'Review started' }
+    }
+    if (event.type === 'review-completed') {
+        return { icon: '✅', text: 'Review completed' }
+    }
+    if (event.type === 'thread-archived') {
+        return { icon: '🗃️', text: 'Thread archived' }
+    }
+    if (event.type === 'thread-unarchived') {
+        return { icon: '📂', text: 'Thread unarchived' }
+    }
     if (event.type === 'turn-duration') {
         const ms = typeof event.durationMs === 'number' ? event.durationMs : 0
         return { icon: '⏱️', text: `Turn: ${formatDuration(ms)}` }

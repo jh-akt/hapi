@@ -4,6 +4,7 @@ import { dirname } from 'node:path'
 
 import { MachineStore } from './machineStore'
 import { MessageStore } from './messageStore'
+import { ProjectStore } from './projectStore'
 import { PushStore } from './pushStore'
 import { SessionStore } from './sessionStore'
 import { UserStore } from './userStore'
@@ -11,6 +12,7 @@ import { UserStore } from './userStore'
 export type {
     StoredMachine,
     StoredMessage,
+    StoredProject,
     StoredPushSubscription,
     StoredSession,
     StoredUser,
@@ -18,17 +20,19 @@ export type {
 } from './types'
 export { MachineStore } from './machineStore'
 export { MessageStore } from './messageStore'
+export { ProjectStore } from './projectStore'
 export { PushStore } from './pushStore'
 export { SessionStore } from './sessionStore'
 export { UserStore } from './userStore'
 
-const SCHEMA_VERSION: number = 7
+const SCHEMA_VERSION: number = 8
 const REQUIRED_TABLES = [
     'sessions',
     'machines',
     'messages',
     'users',
-    'push_subscriptions'
+    'push_subscriptions',
+    'projects'
 ] as const
 
 export class Store {
@@ -40,6 +44,7 @@ export class Store {
     readonly messages: MessageStore
     readonly users: UserStore
     readonly push: PushStore
+    readonly projects: ProjectStore
 
     constructor(dbPath: string) {
         this.dbPath = dbPath
@@ -81,6 +86,7 @@ export class Store {
         this.messages = new MessageStore(this.db)
         this.users = new UserStore(this.db)
         this.push = new PushStore(this.db)
+        this.projects = new ProjectStore(this.db)
     }
 
     private initSchema(): void {
@@ -134,6 +140,12 @@ export class Store {
             return
         }
 
+        if (currentVersion === 7 && SCHEMA_VERSION === 8) {
+            this.migrateFromV7ToV8()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
         if (currentVersion === 4 && SCHEMA_VERSION === 6) {
             this.migrateFromV4ToV5()
             this.migrateFromV5ToV6()
@@ -152,6 +164,30 @@ export class Store {
         if (currentVersion === 5 && SCHEMA_VERSION === 7) {
             this.migrateFromV5ToV6()
             this.migrateFromV6ToV7()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 6 && SCHEMA_VERSION === 8) {
+            this.migrateFromV6ToV7()
+            this.migrateFromV7ToV8()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 5 && SCHEMA_VERSION === 8) {
+            this.migrateFromV5ToV6()
+            this.migrateFromV6ToV7()
+            this.migrateFromV7ToV8()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 4 && SCHEMA_VERSION === 8) {
+            this.migrateFromV4ToV5()
+            this.migrateFromV5ToV6()
+            this.migrateFromV6ToV7()
+            this.migrateFromV7ToV8()
             this.setUserVersion(SCHEMA_VERSION)
             return
         }
@@ -238,6 +274,17 @@ export class Store {
                 UNIQUE(namespace, endpoint)
             );
             CREATE INDEX IF NOT EXISTS idx_push_subscriptions_namespace ON push_subscriptions(namespace);
+
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                namespace TEXT NOT NULL DEFAULT 'default',
+                path TEXT NOT NULL,
+                name TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(namespace, path)
+            );
+            CREATE INDEX IF NOT EXISTS idx_projects_namespace_updated_at ON projects(namespace, updated_at DESC);
         `)
     }
 
@@ -360,6 +407,21 @@ export class Store {
         if (!columns.has('model_reasoning_effort')) {
             this.db.exec('ALTER TABLE sessions ADD COLUMN model_reasoning_effort TEXT')
         }
+    }
+
+    private migrateFromV7ToV8(): void {
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                namespace TEXT NOT NULL DEFAULT 'default',
+                path TEXT NOT NULL,
+                name TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(namespace, path)
+            );
+            CREATE INDEX IF NOT EXISTS idx_projects_namespace_updated_at ON projects(namespace, updated_at DESC);
+        `)
     }
 
     private getSessionColumnNames(): Set<string> {

@@ -1,6 +1,6 @@
 import { getPermissionModesForFlavor, isPermissionModeAllowedForFlavor, toSessionSummary } from '@hapi/protocol'
 import { CodexCollaborationModeSchema, PermissionModeSchema } from '@hapi/protocol/schemas'
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { z } from 'zod'
 import type { SyncEngine, Session } from '../../sync/syncEngine'
 import type { WebAppEnv } from '../middleware/auth'
@@ -44,6 +44,116 @@ const uploadDeleteSchema = z.object({
     path: z.string().min(1)
 })
 
+const codexThreadActionSchema = z.object({
+    threadId: z.string().trim().min(1).nullable().optional()
+})
+
+const codexThreadListSchema = z.object({
+    cursor: z.string().trim().min(1).nullable().optional(),
+    limit: z.number().int().positive().nullable().optional(),
+    sortKey: z.enum(['created_at', 'updated_at']).nullable().optional(),
+    sortDirection: z.enum(['asc', 'desc']).nullable().optional(),
+    modelProviders: z.array(z.string().trim().min(1)).nullable().optional(),
+    sourceKinds: z.array(z.enum([
+        'cli',
+        'vscode',
+        'exec',
+        'appServer',
+        'subAgent',
+        'subAgentReview',
+        'subAgentCompact',
+        'subAgentThreadSpawn',
+        'subAgentOther',
+        'unknown'
+    ])).nullable().optional(),
+    archived: z.boolean().nullable().optional(),
+    cwd: z.union([
+        z.string().trim().min(1),
+        z.array(z.string().trim().min(1)).min(1)
+    ]).nullable().optional(),
+    useStateDbOnly: z.boolean().optional(),
+    searchTerm: z.string().nullable().optional()
+})
+
+const codexThreadReadSchema = codexThreadActionSchema.extend({
+    includeTurns: z.boolean().optional()
+})
+
+const codexThreadForkSchema = codexThreadActionSchema.extend({
+    path: z.string().trim().min(1).nullable().optional(),
+    model: z.string().trim().min(1).nullable().optional(),
+    modelProvider: z.string().trim().min(1).nullable().optional(),
+    cwd: z.string().trim().min(1).nullable().optional(),
+    approvalPolicy: z.enum(['untrusted', 'on-failure', 'on-request', 'never']).nullable().optional(),
+    sandbox: z.enum(['read-only', 'workspace-write', 'danger-full-access']).nullable().optional(),
+    config: z.record(z.string(), z.unknown()).nullable().optional(),
+    baseInstructions: z.string().nullable().optional(),
+    developerInstructions: z.string().nullable().optional(),
+    ephemeral: z.boolean().optional(),
+    excludeTurns: z.boolean().optional(),
+    persistExtendedHistory: z.boolean().optional()
+})
+
+const codexThreadRollbackSchema = codexThreadActionSchema.extend({
+    numTurns: z.number().int().min(1)
+})
+
+const codexUserInputSchema = z.discriminatedUnion('type', [
+    z.object({
+        type: z.literal('text'),
+        text: z.string(),
+        textElements: z.array(z.record(z.string(), z.unknown())).optional(),
+        text_elements: z.array(z.record(z.string(), z.unknown())).optional()
+    }),
+    z.object({
+        type: z.literal('image'),
+        url: z.string().trim().min(1)
+    }),
+    z.object({
+        type: z.literal('localImage'),
+        path: z.string().trim().min(1)
+    }),
+    z.object({
+        type: z.literal('skill'),
+        name: z.string().trim().min(1),
+        path: z.string().trim().min(1)
+    }),
+    z.object({
+        type: z.literal('mention'),
+        name: z.string().trim().min(1),
+        path: z.string().trim().min(1)
+    })
+])
+
+const codexTurnSteerSchema = codexThreadActionSchema.extend({
+    expectedTurnId: z.string().trim().min(1).nullable().optional(),
+    input: z.array(codexUserInputSchema).min(1)
+})
+
+const codexReviewTargetSchema = z.discriminatedUnion('type', [
+    z.object({
+        type: z.literal('uncommittedChanges')
+    }),
+    z.object({
+        type: z.literal('baseBranch'),
+        branch: z.string().trim().min(1)
+    }),
+    z.object({
+        type: z.literal('commit'),
+        sha: z.string().trim().min(1),
+        title: z.string().nullable()
+    }),
+    z.object({
+        type: z.literal('custom'),
+        instructions: z.string().trim().min(1)
+    })
+])
+
+const codexReviewSchema = codexThreadActionSchema.extend({
+    target: codexReviewTargetSchema,
+    delivery: z.enum(['inline', 'detached']).nullable().optional()
+})
+
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 function estimateBase64Bytes(base64: string): number {
@@ -51,6 +161,31 @@ function estimateBase64Bytes(base64: string): number {
     if (len === 0) return 0
     const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
     return Math.floor((len * 3) / 4) - padding
+}
+
+function requireRemoteCodexSession(
+    c: Context<WebAppEnv>,
+    engine: SyncEngine
+): { sessionId: string; session: Session } | Response {
+    const sessionResult = requireSessionFromParam(c, engine, { requireActive: true })
+    if (sessionResult instanceof Response) {
+        return sessionResult
+    }
+
+    const flavor = sessionResult.session.metadata?.flavor ?? 'claude'
+    if (flavor !== 'codex') {
+        return c.json({ error: 'Codex app-server actions are only supported for Codex sessions' }, 400)
+    }
+
+    if (sessionResult.session.metadata?.source === 'native-attached') {
+        return c.json({ error: 'Codex app-server actions are not supported for native sessions' }, 400)
+    }
+
+    if (sessionResult.session.agentState?.controlledByUser === true) {
+        return c.json({ error: 'Codex app-server actions are only supported for remote Codex sessions' }, 409)
+    }
+
+    return sessionResult
 }
 
 export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null): Hono<WebAppEnv> {
@@ -246,6 +381,214 @@ export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null): Ho
         }
 
         return c.json({ sessionId: result.sessionId })
+    })
+
+    app.post('/sessions/:id/codex/threads/list', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireRemoteCodexSession(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const body = await c.req.json().catch(() => ({}))
+        const parsed = codexThreadListSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body' }, 400)
+        }
+
+        try {
+            const result = await engine.listCodexThreads(sessionResult.sessionId, parsed.data)
+            return c.json(result)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to list Codex threads'
+            return c.json({ error: message }, 409)
+        }
+    })
+
+    app.post('/sessions/:id/codex/threads/read', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireRemoteCodexSession(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const body = await c.req.json().catch(() => ({}))
+        const parsed = codexThreadReadSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body' }, 400)
+        }
+
+        try {
+            const result = await engine.readCodexThread(sessionResult.sessionId, parsed.data)
+            return c.json(result)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to read Codex thread'
+            return c.json({ error: message }, 409)
+        }
+    })
+
+    app.post('/sessions/:id/codex/threads/fork', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireRemoteCodexSession(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const body = await c.req.json().catch(() => ({}))
+        const parsed = codexThreadForkSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body' }, 400)
+        }
+
+        try {
+            const result = await engine.forkCodexThread(sessionResult.sessionId, parsed.data)
+            return c.json(result)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to fork Codex thread'
+            return c.json({ error: message }, 409)
+        }
+    })
+
+    app.post('/sessions/:id/codex/threads/archive', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireRemoteCodexSession(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const body = await c.req.json().catch(() => ({}))
+        const parsed = codexThreadActionSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body' }, 400)
+        }
+
+        try {
+            const result = await engine.archiveCodexThread(sessionResult.sessionId, parsed.data)
+            return c.json(result)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to archive Codex thread'
+            return c.json({ error: message }, 409)
+        }
+    })
+
+    app.post('/sessions/:id/codex/threads/unarchive', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireRemoteCodexSession(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const body = await c.req.json().catch(() => ({}))
+        const parsed = codexThreadActionSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body' }, 400)
+        }
+
+        try {
+            const result = await engine.unarchiveCodexThread(sessionResult.sessionId, parsed.data)
+            return c.json(result)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to unarchive Codex thread'
+            return c.json({ error: message }, 409)
+        }
+    })
+
+    app.post('/sessions/:id/codex/threads/rollback', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireRemoteCodexSession(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const body = await c.req.json().catch(() => ({}))
+        const parsed = codexThreadRollbackSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body' }, 400)
+        }
+
+        try {
+            const result = await engine.rollbackCodexThread(sessionResult.sessionId, parsed.data)
+            return c.json(result)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to rollback Codex thread'
+            return c.json({ error: message }, 409)
+        }
+    })
+
+    app.post('/sessions/:id/codex/turn/steer', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireRemoteCodexSession(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const body = await c.req.json().catch(() => null)
+        const parsed = codexTurnSteerSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body' }, 400)
+        }
+
+        try {
+            const result = await engine.steerCodexTurn(sessionResult.sessionId, parsed.data)
+            return c.json(result)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to steer Codex turn'
+            return c.json({ error: message }, 409)
+        }
+    })
+
+    app.post('/sessions/:id/codex/review', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireRemoteCodexSession(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const body = await c.req.json().catch(() => null)
+        const parsed = codexReviewSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body' }, 400)
+        }
+
+        try {
+            const result = await engine.startCodexReview(sessionResult.sessionId, parsed.data)
+            return c.json(result)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to start Codex review'
+            return c.json({ error: message }, 409)
+        }
     })
 
     app.post('/sessions/:id/switch', async (c) => {

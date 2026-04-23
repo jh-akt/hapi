@@ -2,6 +2,22 @@ import type {
     AttachmentMetadata,
     AuthResponse,
     CodexCollaborationMode,
+    CodexSessionsResponse,
+    CodexReviewStartParams,
+    CodexReviewStartResponse,
+    CodexThreadActionParams,
+    CodexThreadArchiveResponse,
+    CodexThreadForkParams,
+    CodexThreadForkResponse,
+    CodexThreadListParams,
+    CodexThreadListResponse,
+    CodexThreadReadParams,
+    CodexThreadReadResponse,
+    CodexThreadRollbackParams,
+    CodexThreadRollbackResponse,
+    CodexThreadUnarchiveResponse,
+    CodexTurnSteerParams,
+    CodexTurnSteerResponse,
     DeleteUploadResponse,
     ListDirectoryResponse,
     FileReadResponse,
@@ -10,6 +26,8 @@ import type {
     MachinePathsExistsResponse,
     MachinesResponse,
     MessagesResponse,
+    ProjectsResponse,
+    CreateProjectResponse,
     NativeSessionAttachResponse,
     NativeSessionsResponse,
     PermissionMode,
@@ -162,6 +180,14 @@ export class ApiClient {
         return await this.request<SessionsResponse>('/api/sessions')
     }
 
+    async getCodexSessions(): Promise<CodexSessionsResponse> {
+        return await this.request<CodexSessionsResponse>('/api/codex-sessions')
+    }
+
+    async getProjects(): Promise<ProjectsResponse> {
+        return await this.request<ProjectsResponse>('/api/projects')
+    }
+
     async getPushVapidPublicKey(): Promise<PushVapidPublicKeyResponse> {
         return await this.request<PushVapidPublicKeyResponse>('/api/push/vapid-public-key')
     }
@@ -310,6 +336,107 @@ export class ApiClient {
             }
         )
         return response.sessionId
+    }
+
+    async listCodexThreads(sessionId: string, params?: CodexThreadListParams): Promise<CodexThreadListResponse> {
+        return await this.request<CodexThreadListResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/codex/threads/list`,
+            {
+                method: 'POST',
+                body: JSON.stringify(params ?? {})
+            }
+        )
+    }
+
+    async readCodexThread(sessionId: string, params: CodexThreadReadParams): Promise<CodexThreadReadResponse> {
+        return await this.request<CodexThreadReadResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/codex/threads/read`,
+            {
+                method: 'POST',
+                body: JSON.stringify(params)
+            }
+        )
+    }
+
+    async forkCodexThread(sessionId: string, params: CodexThreadForkParams): Promise<CodexThreadForkResponse> {
+        return await this.request<CodexThreadForkResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/codex/threads/fork`,
+            {
+                method: 'POST',
+                body: JSON.stringify(params)
+            }
+        )
+    }
+
+    async archiveCodexThread(sessionId: string, params?: CodexThreadActionParams): Promise<CodexThreadArchiveResponse> {
+        return await this.request<CodexThreadArchiveResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/codex/threads/archive`,
+            {
+                method: 'POST',
+                body: JSON.stringify(params ?? {})
+            }
+        )
+    }
+
+    async unarchiveCodexThread(sessionId: string, params?: CodexThreadActionParams): Promise<CodexThreadUnarchiveResponse> {
+        return await this.request<CodexThreadUnarchiveResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/codex/threads/unarchive`,
+            {
+                method: 'POST',
+                body: JSON.stringify(params ?? {})
+            }
+        )
+    }
+
+    async rollbackCodexThread(sessionId: string, params: CodexThreadRollbackParams): Promise<CodexThreadRollbackResponse> {
+        return await this.request<CodexThreadRollbackResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/codex/threads/rollback`,
+            {
+                method: 'POST',
+                body: JSON.stringify(params)
+            }
+        )
+    }
+
+    async steerCodexTurn(sessionId: string, params: CodexTurnSteerParams): Promise<CodexTurnSteerResponse> {
+        return await this.request<CodexTurnSteerResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/codex/turn/steer`,
+            {
+                method: 'POST',
+                body: JSON.stringify(params)
+            }
+        )
+    }
+
+    async startCodexReview(sessionId: string, params: CodexReviewStartParams): Promise<CodexReviewStartResponse> {
+        return await this.request<CodexReviewStartResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/codex/review`,
+            {
+                method: 'POST',
+                body: JSON.stringify(params)
+            }
+        )
+    }
+
+    async createProject(payload: {
+        path: string
+        name?: string
+    }): Promise<CreateProjectResponse> {
+        return await this.request<CreateProjectResponse>('/api/projects', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        })
+    }
+
+    async openCodexSession(payload: {
+        cwd: string
+        codexSessionId: string
+        title?: string
+    }): Promise<NativeSessionAttachResponse> {
+        return await this.request<NativeSessionAttachResponse>('/api/codex-sessions/open', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        })
     }
 
     async switchSession(sessionId: string): Promise<void> {

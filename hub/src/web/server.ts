@@ -15,8 +15,10 @@ import { createSessionsRoutes } from './routes/sessions'
 import { createMessagesRoutes } from './routes/messages'
 import { createPermissionsRoutes } from './routes/permissions'
 import { createNativeSessionRoutes } from './routes/nativeSessions'
+import { createCodexSessionsRoutes } from './routes/codexSessions'
 import { createMachinesRoutes } from './routes/machines'
 import { createGitRoutes } from './routes/git'
+import { createProjectsRoutes } from './routes/projects'
 import { createCliRoutes } from './routes/cli'
 import { createPushRoutes } from './routes/push'
 import { createVoiceRoutes } from './routes/voice'
@@ -28,6 +30,25 @@ import type { WebSocketData } from '@socket.io/bun-engine'
 import { loadEmbeddedAssetMap, type EmbeddedWebAsset } from './embeddedAssets'
 import { isBunCompiled } from '../utils/bunCompiled'
 import type { Store } from '../store'
+
+export function getStaticAssetCacheControl(path: string): string {
+    if (path.startsWith('/assets/')) {
+        return 'public, max-age=31536000, immutable'
+    }
+
+    return 'no-cache, max-age=0, must-revalidate'
+}
+
+function applyStaticAssetCacheControl(path: string, response: Response): Response {
+    const headers = new Headers(response.headers)
+    headers.set('Cache-Control', getStaticAssetCacheControl(path))
+
+    return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers
+    })
+}
 
 function findWebappDistDir(): { distDir: string; indexHtmlPath: string } {
     const candidates = [
@@ -47,10 +68,11 @@ function findWebappDistDir(): { distDir: string; indexHtmlPath: string } {
     return { distDir, indexHtmlPath: join(distDir, 'index.html') }
 }
 
-function serveEmbeddedAsset(asset: EmbeddedWebAsset): Response {
+function serveEmbeddedAsset(path: string, asset: EmbeddedWebAsset): Response {
     return new Response(Bun.file(asset.sourcePath), {
         headers: {
-            'Content-Type': asset.mimeType
+            'Content-Type': asset.mimeType,
+            'Cache-Control': getStaticAssetCacheControl(path)
         }
     })
 }
@@ -92,6 +114,8 @@ function createWebApp(options: {
     app.use('/api/*', createAuthMiddleware(options.jwtSecret))
     app.route('/api', createEventsRoutes(options.getSseManager, options.getSyncEngine, options.getVisibilityTracker))
     app.route('/api', createSessionsRoutes(options.getSyncEngine))
+    app.route('/api', createCodexSessionsRoutes(options.getSyncEngine))
+    app.route('/api', createProjectsRoutes(options.getSyncEngine))
     app.route('/api', createMessagesRoutes(options.getSyncEngine))
     app.route('/api', createPermissionsRoutes(options.getSyncEngine))
     app.route('/api', createNativeSessionRoutes(options.getSyncEngine))
@@ -150,7 +174,7 @@ from GitHub Pages instead of through the relay tunnel.
 
             const asset = embeddedAssetMap.get(c.req.path)
             if (asset) {
-                return serveEmbeddedAsset(asset)
+                return serveEmbeddedAsset(c.req.path, asset)
             }
 
             return await next()
@@ -162,7 +186,7 @@ from GitHub Pages instead of through the relay tunnel.
                 return
             }
 
-            return serveEmbeddedAsset(indexHtmlAsset)
+            return serveEmbeddedAsset(c.req.path, indexHtmlAsset)
         })
 
         return app
@@ -180,7 +204,8 @@ from GitHub Pages instead of through the relay tunnel.
         return app
     }
 
-    app.use('/assets/*', serveStatic({ root: distDir }))
+    const serveDistAsset = serveStatic({ root: distDir })
+    const serveIndexHtml = serveStatic({ root: distDir, path: 'index.html' })
 
     app.use('*', async (c, next) => {
         if (c.req.path.startsWith('/api')) {
@@ -188,7 +213,12 @@ from GitHub Pages instead of through the relay tunnel.
             return
         }
 
-        return await serveStatic({ root: distDir })(c, next)
+        const response = await serveDistAsset(c, next)
+        if (!response) {
+            return response
+        }
+
+        return applyStaticAssetCacheControl(c.req.path, response)
     })
 
     app.get('*', async (c, next) => {
@@ -197,7 +227,12 @@ from GitHub Pages instead of through the relay tunnel.
             return
         }
 
-        return await serveStatic({ root: distDir, path: 'index.html' })(c, next)
+        const response = await serveIndexHtml(c, next)
+        if (!response) {
+            return response
+        }
+
+        return applyStaticAssetCacheControl(c.req.path, response)
     })
 
     return app

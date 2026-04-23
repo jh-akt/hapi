@@ -19,7 +19,7 @@ import { HappyComposer } from '@/components/AssistantChat/HappyComposer'
 import { HappyThread } from '@/components/AssistantChat/HappyThread'
 import { useHappyRuntime } from '@/lib/assistant-runtime'
 import { createAttachmentAdapter } from '@/lib/attachmentAdapter'
-import { findUnsupportedCodexBuiltinSlashCommand } from '@/lib/codexSlashCommands'
+import { findUnsupportedCodexBuiltinSlashCommand, parseCodexReviewSlashCommand } from '@/lib/codexSlashCommands'
 import { useToast } from '@/lib/toast-context'
 import { useTranslation } from '@/lib/use-translation'
 import { SessionHeader } from '@/components/SessionHeader'
@@ -67,6 +67,7 @@ export function SessionChat(props: {
     const {
         abortSession,
         switchSession,
+        startCodexReview,
         setPermissionMode,
         setCollaborationMode,
         setModel,
@@ -312,6 +313,33 @@ export function SessionChat(props: {
 
     const handleSend = useCallback((text: string, attachments?: AttachmentMetadata[]) => {
         if (agentFlavor === 'codex') {
+            const reviewCommand = parseCodexReviewSlashCommand(text)
+            if (reviewCommand) {
+                const canStartStructuredReview = props.session.active && !isNativeSession && !controlledByUser
+                if (!canStartStructuredReview) {
+                    haptic.notification('error')
+                    addToast({
+                        title: t('composer.codexSlashUnsupported.title'),
+                        body: t('composer.codexSlashUnsupported.body', { command: '/review' }),
+                        sessionId: props.session.id,
+                        url: `/sessions/${props.session.id}`
+                    })
+                    return
+                }
+
+                void startCodexReview(reviewCommand).catch((error) => {
+                    haptic.notification('error')
+                    addToast({
+                        title: 'Review failed',
+                        body: error instanceof Error ? error.message : 'Failed to start review',
+                        sessionId: props.session.id,
+                        url: `/sessions/${props.session.id}`
+                    })
+                })
+                setForceScrollToken((token) => token + 1)
+                return
+            }
+
             const unsupportedCommand = findUnsupportedCodexBuiltinSlashCommand(
                 text,
                 props.availableSlashCommands ?? []
@@ -330,7 +358,19 @@ export function SessionChat(props: {
 
         props.onSend(text, attachments)
         setForceScrollToken((token) => token + 1)
-    }, [agentFlavor, props.availableSlashCommands, props.onSend, props.session.id, addToast, haptic, t])
+    }, [
+        agentFlavor,
+        props.availableSlashCommands,
+        props.onSend,
+        props.session.active,
+        props.session.id,
+        addToast,
+        controlledByUser,
+        haptic,
+        isNativeSession,
+        startCodexReview,
+        t
+    ])
 
     const attachmentAdapter = useMemo(() => {
         if (!props.session.active || isNativeSession) {

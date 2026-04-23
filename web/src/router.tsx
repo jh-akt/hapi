@@ -10,6 +10,7 @@ import {
     useMatchRoute,
     useNavigate,
     useParams,
+    useSearch,
 } from '@tanstack/react-router'
 import { App } from '@/App'
 import { SessionChat } from '@/components/SessionChat'
@@ -23,11 +24,13 @@ import { isTelegramApp } from '@/hooks/useTelegram'
 import { useSidebarResize } from '@/hooks/useSidebarResize'
 import { useMessages } from '@/hooks/queries/useMessages'
 import { useMachines } from '@/hooks/queries/useMachines'
+import { useCodexSessions } from '@/hooks/queries/useCodexSessions'
 import { useSession } from '@/hooks/queries/useSession'
-import { useSessions } from '@/hooks/queries/useSessions'
+import { useProjects } from '@/hooks/queries/useProjects'
 import { useSlashCommands } from '@/hooks/queries/useSlashCommands'
 import { useSkills } from '@/hooks/queries/useSkills'
 import { useSendMessage } from '@/hooks/mutations/useSendMessage'
+import { getProjectPath, getSessionProjectPath, normalizeProjectPath } from '@/lib/project-path'
 import { queryKeys } from '@/lib/query-keys'
 import { useToast } from '@/lib/toast-context'
 import { useTranslation } from '@/lib/use-translation'
@@ -106,12 +109,15 @@ function getMachineTitle(machine: Machine): string {
 
 function SessionsPage() {
     const { api } = useAppContext()
+    const queryClient = useQueryClient()
     const navigate = useNavigate()
     const pathname = useLocation({ select: location => location.pathname })
+    const search = useSearch({ from: '/sessions' })
     const matchRoute = useMatchRoute()
     const { t } = useTranslation()
     const [showArchived, setShowArchived] = useState(false)
-    const { sessions, isLoading, error, refetch } = useSessions(api)
+    const { sessions, isLoading, error, refetch } = useCodexSessions(api)
+    const { projects } = useProjects(api)
     const { machines } = useMachines(api, true)
 
     const handleRefresh = useCallback(() => {
@@ -127,8 +133,8 @@ function SessionsPage() {
         [sessions, showArchived]
     )
     const projectCount = useMemo(() => new Set(visibleSessions.map(s =>
-        s.metadata?.worktree?.basePath ?? s.metadata?.path ?? 'Other'
-    )).size, [visibleSessions])
+        getSessionProjectPath(s) ?? 'Other'
+    ).concat(projects.map((project) => getProjectPath(project)))).size, [projects, visibleSessions])
     const machineLabelsById = useMemo(() => {
         const labels: Record<string, string> = {}
         for (const machine of machines) {
@@ -191,11 +197,39 @@ function SessionsPage() {
                     ) : null}
                     <SessionList
                         sessions={visibleSessions}
+                        projects={projects}
                         selectedSessionId={selectedSessionId}
-                        onSelect={(sessionId) => navigate({
-                            to: '/sessions/$sessionId',
-                            params: { sessionId },
-                        })}
+                        onSelect={(session) => {
+                            if (!('listSource' in session) || !session.id.startsWith('codex:')) {
+                                navigate({
+                                    to: '/sessions/$sessionId',
+                                    params: { sessionId: session.id },
+                                    search: {}
+                                })
+                                return
+                            }
+
+                            if (!api || !('codexSessionId' in session)) {
+                                return
+                            }
+
+                            void api.openCodexSession({
+                                cwd: session.metadata?.path ?? '',
+                                codexSessionId: session.codexSessionId,
+                                title: session.metadata?.name ?? undefined
+                            }).then(async ({ sessionId }) => {
+                                await Promise.all([
+                                    queryClient.invalidateQueries({ queryKey: queryKeys.codexSessions }),
+                                    queryClient.invalidateQueries({ queryKey: queryKeys.sessions }),
+                                    queryClient.invalidateQueries({ queryKey: queryKeys.nativeSessions })
+                                ])
+                                navigate({
+                                    to: '/sessions/$sessionId',
+                                    params: { sessionId },
+                                    search: {}
+                                })
+                            }).catch(() => {})
+                        }}
                         onNewSession={() => navigate({ to: '/sessions/new' })}
                         onRefresh={handleRefresh}
                         isLoading={isLoading}
@@ -203,6 +237,7 @@ function SessionsPage() {
                         api={api}
                         machineLabelsById={machineLabelsById}
                         emptyLabel={showArchived ? t('sessions.empty.archived') : t('sessions.empty.active')}
+                        focusedProjectPath={search.projectPath ?? null}
                     />
                 </div>
             </div>
@@ -237,6 +272,7 @@ function SessionPage() {
     const { sessionId } = useParams({ from: '/sessions/$sessionId' })
     const {
         session,
+        error,
         refetch: refetchSession,
     } = useSession(api, sessionId)
     const {
@@ -340,6 +376,40 @@ function SessionPage() {
         void refetchMessages()
     }, [refetchMessages, refetchSession])
 
+    if (error) {
+        const sessionMissing = error.includes('HTTP 404') || error.includes('Session not found')
+        return (
+            <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-4 text-center">
+                <div className="max-w-md rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-4 py-3">
+                    <div className="text-sm font-medium text-[var(--app-fg)]">
+                        {sessionMissing ? 'Session not found' : 'Failed to load session'}
+                    </div>
+                    <div className="mt-1 text-sm text-[var(--app-hint)]">
+                        {sessionMissing
+                            ? 'This session may have been merged into another live session. Return to the session list and open the latest one.'
+                            : error}
+                    </div>
+                </div>
+                <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => navigate({ to: '/sessions' })}
+                        className="rounded-md bg-[var(--app-button)] px-3 py-2 text-sm text-[var(--app-button-text)]"
+                    >
+                        Back to Sessions
+                    </button>
+                    <button
+                        type="button"
+                        onClick={refreshSelectedSession}
+                        className="rounded-md border border-[var(--app-border)] px-3 py-2 text-sm text-[var(--app-fg)]"
+                    >
+                        Retry
+                    </button>
+                </div>
+            </div>
+        )
+    }
+
     if (!session) {
         return (
             <div className="flex-1 flex items-center justify-center p-4">
@@ -404,7 +474,17 @@ function NewSessionPage() {
             navigate({
                 to: '/sessions/$sessionId',
                 params: { sessionId },
+                search: {}
             })
+        })
+    }, [navigate, queryClient])
+
+    const handleProjectCreated = useCallback((projectPath: string) => {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.projects })
+        navigate({
+            to: '/sessions',
+            replace: true,
+            search: { projectPath }
         })
     }, [navigate, queryClient])
 
@@ -451,6 +531,7 @@ function NewSessionPage() {
                 <NativeSessionAttach
                     api={api}
                     onSuccess={handleSuccess}
+                    onProjectCreated={handleProjectCreated}
                 />
             </div>
         </div>
@@ -470,6 +551,12 @@ const indexRoute = createRoute({
 const sessionsRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/sessions',
+    validateSearch: (search: Record<string, unknown>): { projectPath?: string } => {
+        const projectPath = typeof search.projectPath === 'string' && search.projectPath.trim().length > 0
+            ? normalizeProjectPath(search.projectPath)
+            : undefined
+        return projectPath ? { projectPath } : {}
+    },
     component: SessionsPage,
 })
 

@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { findUnsupportedCodexBuiltinSlashCommand, getBuiltinSlashCommands } from './codexSlashCommands'
+import {
+    findUnsupportedCodexBuiltinSlashCommand,
+    getBuiltinSlashCommands,
+    parseCodexReviewSlashCommand
+} from './codexSlashCommands'
 
 describe('getBuiltinSlashCommands', () => {
-    it('does not expose codex built-ins in remote web mode', () => {
-        expect(getBuiltinSlashCommands('codex')).toEqual([])
+    it('exposes supported codex built-ins in remote web mode', () => {
+        expect(getBuiltinSlashCommands('codex')).toEqual([
+            { name: 'review', description: 'Run Codex automated review on current changes', source: 'builtin' }
+        ])
     })
 })
 
@@ -22,5 +28,26 @@ describe('findUnsupportedCodexBuiltinSlashCommand', () => {
         expect(findUnsupportedCodexBuiltinSlashCommand('/status', [
             { name: 'status', source: 'project', content: 'project status prompt' }
         ])).toBeNull()
+    })
+
+    it('does not treat /review as unsupported', () => {
+        expect(findUnsupportedCodexBuiltinSlashCommand('/review', [])).toBeNull()
+    })
+})
+
+describe('parseCodexReviewSlashCommand', () => {
+    it('parses bare /review into uncommittedChanges target', () => {
+        expect(parseCodexReviewSlashCommand('/review')).toEqual({
+            target: { type: 'uncommittedChanges' }
+        })
+    })
+
+    it('parses /review with instructions into a custom target', () => {
+        expect(parseCodexReviewSlashCommand('/review focus on test regressions')).toEqual({
+            target: {
+                type: 'custom',
+                instructions: 'focus on test regressions'
+            }
+        })
     })
 })

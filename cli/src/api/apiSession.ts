@@ -457,6 +457,18 @@ export class ApiSessionClient extends EventEmitter {
         type: 'permission-mode-changed'
         mode: SessionPermissionMode
     } | {
+        type: 'review-started'
+        review?: string
+    } | {
+        type: 'review-completed'
+        review?: string
+    } | {
+        type: 'thread-archived'
+        threadId?: string
+    } | {
+        type: 'thread-unarchived'
+        threadId?: string
+    } | {
         type: 'ready'
     }, id?: string): void {
         const content = {

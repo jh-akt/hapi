@@ -2,12 +2,31 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { logger } from '@/ui/logger';
 import { killProcessByChildProcess } from '@/utils/process';
 import type {
+    CodexAppServerMethod,
+    CodexAppServerParams,
+    CodexAppServerResult,
     InitializeParams,
     InitializeResponse,
+    ReviewStartParams,
+    ReviewStartResponse,
+    ThreadArchiveParams,
+    ThreadArchiveResponse,
+    ThreadForkParams,
+    ThreadForkResponse,
+    ThreadListParams,
+    ThreadListResponse,
+    ThreadReadParams,
+    ThreadReadResponse,
+    ThreadRollbackParams,
+    ThreadRollbackResponse,
     ThreadStartParams,
     ThreadStartResponse,
     ThreadResumeParams,
     ThreadResumeResponse,
+    ThreadUnarchiveParams,
+    ThreadUnarchiveResponse,
+    TurnSteerParams,
+    TurnSteerResponse,
     TurnStartParams,
     TurnStartResponse,
     TurnInterruptParams,
@@ -128,40 +147,85 @@ export class CodexAppServerClient {
     }
 
     async initialize(params: InitializeParams): Promise<InitializeResponse> {
-        const response = await this.sendRequest('initialize', params, { timeoutMs: 30_000 });
+        const response = await this.request('initialize', params, { timeoutMs: 30_000 });
         this.sendNotification('initialized');
-        return response as InitializeResponse;
+        return response;
     }
 
     async startThread(params: ThreadStartParams, options?: { signal?: AbortSignal }): Promise<ThreadStartResponse> {
-        const response = await this.sendRequest('thread/start', params, {
+        return await this.request('thread/start', params, {
             signal: options?.signal,
             timeoutMs: CodexAppServerClient.DEFAULT_TIMEOUT_MS
         });
-        return response as ThreadStartResponse;
     }
 
     async resumeThread(params: ThreadResumeParams, options?: { signal?: AbortSignal }): Promise<ThreadResumeResponse> {
-        const response = await this.sendRequest('thread/resume', params, {
+        return await this.request('thread/resume', params, {
             signal: options?.signal,
             timeoutMs: CodexAppServerClient.DEFAULT_TIMEOUT_MS
         });
-        return response as ThreadResumeResponse;
+    }
+
+    async forkThread(params: ThreadForkParams, options?: { signal?: AbortSignal }): Promise<ThreadForkResponse> {
+        return await this.request('thread/fork', params, {
+            signal: options?.signal,
+            timeoutMs: CodexAppServerClient.DEFAULT_TIMEOUT_MS
+        });
+    }
+
+    async archiveThread(params: ThreadArchiveParams): Promise<ThreadArchiveResponse> {
+        return await this.request('thread/archive', params, {
+            timeoutMs: 30_000
+        });
+    }
+
+    async unarchiveThread(params: ThreadUnarchiveParams): Promise<ThreadUnarchiveResponse> {
+        return await this.request('thread/unarchive', params, {
+            timeoutMs: 30_000
+        });
+    }
+
+    async rollbackThread(params: ThreadRollbackParams): Promise<ThreadRollbackResponse> {
+        return await this.request('thread/rollback', params, {
+            timeoutMs: 30_000
+        });
+    }
+
+    async listThreads(params: ThreadListParams): Promise<ThreadListResponse> {
+        return await this.request('thread/list', params, {
+            timeoutMs: 30_000
+        });
+    }
+
+    async readThread(params: ThreadReadParams): Promise<ThreadReadResponse> {
+        return await this.request('thread/read', params, {
+            timeoutMs: 30_000
+        });
     }
 
     async startTurn(params: TurnStartParams, options?: { signal?: AbortSignal }): Promise<TurnStartResponse> {
-        const response = await this.sendRequest('turn/start', params, {
+        return await this.request('turn/start', params, {
             signal: options?.signal,
             timeoutMs: CodexAppServerClient.DEFAULT_TIMEOUT_MS
         });
-        return response as TurnStartResponse;
+    }
+
+    async steerTurn(params: TurnSteerParams): Promise<TurnSteerResponse> {
+        return await this.request('turn/steer', params, {
+            timeoutMs: 30_000
+        });
     }
 
     async interruptTurn(params: TurnInterruptParams): Promise<TurnInterruptResponse> {
-        const response = await this.sendRequest('turn/interrupt', params, {
+        return await this.request('turn/interrupt', params, {
             timeoutMs: 30_000
         });
-        return response as TurnInterruptResponse;
+    }
+
+    async startReview(params: ReviewStartParams): Promise<ReviewStartResponse> {
+        return await this.request('review/start', params, {
+            timeoutMs: CodexAppServerClient.DEFAULT_TIMEOUT_MS
+        });
     }
 
     async disconnect(): Promise<void> {
@@ -260,6 +324,15 @@ export class CodexAppServerClient {
 
             this.writePayload(payload);
         });
+    }
+
+    async request<TMethod extends CodexAppServerMethod>(
+        method: TMethod,
+        params: CodexAppServerParams<TMethod>,
+        options?: { signal?: AbortSignal; timeoutMs?: number }
+    ): Promise<CodexAppServerResult<TMethod>> {
+        const response = await this.sendRequest(method, params, options);
+        return response as CodexAppServerResult<TMethod>;
     }
 
     private sendNotification(method: string, params?: unknown): void {

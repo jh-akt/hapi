@@ -5,11 +5,10 @@ import { PROTOCOL_VERSION } from '@hapi/protocol'
 import type { StartOptions } from '@/claude/runClaude'
 import { CLAUDE_PERMISSION_MODES } from '@hapi/protocol/modes'
 import { configuration } from '@/configuration'
-import { isRunnerRunningCurrentlyInstalledHappyVersion } from '@/runner/controlClient'
 import { authAndSetupMachineIfNeeded } from '@/ui/auth'
 import { logger } from '@/ui/logger'
 import { initializeToken } from '@/ui/tokenInit'
-import { spawnHappyCLI } from '@/utils/spawnHappyCLI'
+import { maybeAutoStartRunner } from '@/utils/autoStartRunner'
 import { maybeAutoStartServer } from '@/utils/autoStartServer'
 import { withBunRuntimeEnv } from '@/utils/bunRuntime'
 import { extractErrorInfo } from '@/utils/errorUtils'
@@ -134,21 +133,7 @@ ${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
         await initializeToken()
         await maybeAutoStartServer()
         await authAndSetupMachineIfNeeded()
-
-        logger.debug('Ensuring hapi background service is running & matches our version...')
-
-        if (!(await isRunnerRunningCurrentlyInstalledHappyVersion())) {
-            logger.debug('Starting hapi background service...')
-
-            const runnerProcess = spawnHappyCLI(['runner', 'start-sync'], {
-                detached: true,
-                stdio: 'ignore',
-                env: process.env
-            })
-            runnerProcess.unref()
-
-            await new Promise(resolve => setTimeout(resolve, 200))
-        }
+        await maybeAutoStartRunner()
 
         try {
             const { runClaude } = await import('@/claude/runClaude')

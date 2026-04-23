@@ -11,6 +11,16 @@ import { buildHapiMcpBridge } from './utils/buildHapiMcpBridge';
 import { emitReadyIfIdle } from './utils/emitReadyIfIdle';
 import type { CodexSession } from './session';
 import type { EnhancedMode } from './loop';
+import type {
+    ReviewStartParams,
+    ThreadArchiveParams,
+    ThreadForkParams,
+    ThreadListParams,
+    ThreadReadParams,
+    ThreadRollbackParams,
+    ThreadUnarchiveParams,
+    TurnSteerParams
+} from './appServerTypes';
 import { hasCodexCliOverrides } from './utils/codexCliOverrides';
 import { AppServerEventConverter } from './utils/appServerEventConverter';
 import { registerAppServerPermissionHandlers } from './utils/appServerPermissionAdapter';
@@ -24,6 +34,27 @@ import {
 
 type HappyServer = Awaited<ReturnType<typeof buildHapiMcpBridge>>['server'];
 type QueuedMessage = { message: string; mode: EnhancedMode; isolate: boolean; hash: string };
+type SessionAppServerRpcMethod =
+    | 'thread/list'
+    | 'thread/read'
+    | 'thread/fork'
+    | 'thread/archive'
+    | 'thread/unarchive'
+    | 'thread/rollback'
+    | 'turn/steer'
+    | 'review/start';
+
+const SESSION_APP_SERVER_RPC_METHOD = 'codex-app-server';
+const SESSION_APP_SERVER_RPC_METHODS = new Set<SessionAppServerRpcMethod>([
+    'thread/list',
+    'thread/read',
+    'thread/fork',
+    'thread/archive',
+    'thread/unarchive',
+    'thread/rollback',
+    'turn/steer',
+    'review/start'
+]);
 
 class CodexRemoteLauncher extends RemoteLauncherBase {
     private readonly session: CodexSession;
@@ -138,6 +169,10 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
 
         const asString = (value: unknown): string | null => {
             return typeof value === 'string' && value.length > 0 ? value : null;
+        };
+
+        const asNumber = (value: unknown): number | null => {
+            return typeof value === 'number' && Number.isFinite(value) ? value : null;
         };
 
         const applyResolvedModel = (value: unknown): string | undefined => {
@@ -315,6 +350,34 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             } else if (msgType === 'task_failed') {
                 const error = asString(msg.error);
                 messageBuffer.addMessage(error ? `Task failed: ${error}` : 'Task failed', 'status');
+            } else if (msgType === 'review_started') {
+                const review = asString(msg.review);
+                messageBuffer.addMessage(review ? `Starting review: ${review}` : 'Starting review...', 'status');
+                session.sendSessionEvent({
+                    type: 'review-started',
+                    ...(review ? { review } : {})
+                });
+            } else if (msgType === 'review_completed') {
+                messageBuffer.addMessage('Review completed', 'status');
+                const review = asString(msg.review);
+                session.sendSessionEvent({
+                    type: 'review-completed',
+                    ...(review ? { review } : {})
+                });
+            } else if (msgType === 'thread_archived') {
+                const threadId = asString(msg.thread_id ?? msg.threadId);
+                messageBuffer.addMessage('Thread archived', 'status');
+                session.sendSessionEvent({
+                    type: 'thread-archived',
+                    ...(threadId ? { threadId } : {})
+                });
+            } else if (msgType === 'thread_unarchived') {
+                const threadId = asString(msg.thread_id ?? msg.threadId);
+                messageBuffer.addMessage('Thread unarchived', 'status');
+                session.sendSessionEvent({
+                    type: 'thread-unarchived',
+                    ...(threadId ? { threadId } : {})
+                });
             }
 
             if (msgType === 'task_started') {
@@ -569,6 +632,117 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             }
         });
 
+        const resolveRpcThreadId = (value: unknown): string => {
+            const threadId = asString(value) ?? this.currentThreadId ?? session.sessionId;
+            if (!threadId) {
+                throw new Error('No active Codex thread available');
+            }
+            return threadId;
+        };
+
+        const resolveRpcTurnId = (value: unknown): string => {
+            const turnId = asString(value) ?? this.currentTurnId;
+            if (!turnId) {
+                throw new Error('No active Codex turn available');
+            }
+            return turnId;
+        };
+
+        session.client.rpcHandlerManager.registerHandler(SESSION_APP_SERVER_RPC_METHOD, async (payload: unknown) => {
+            const request = asRecord(payload);
+            const methodValue = asString(request?.method);
+
+            if (!methodValue || !SESSION_APP_SERVER_RPC_METHODS.has(methodValue as SessionAppServerRpcMethod)) {
+                throw new Error('Unsupported Codex app-server RPC method');
+            }
+
+            const method = methodValue as SessionAppServerRpcMethod;
+            const params = asRecord(request?.params) ?? {};
+
+            switch (method) {
+                case 'thread/list':
+                    return await appServerClient.listThreads(params as ThreadListParams);
+
+                case 'thread/read': {
+                    const readParams: ThreadReadParams = {
+                        threadId: resolveRpcThreadId(params.threadId),
+                        includeTurns: params.includeTurns === true
+                    };
+                    return await appServerClient.readThread(readParams);
+                }
+
+                case 'thread/fork': {
+                    const forkParams: ThreadForkParams = {
+                        ...(params as Partial<ThreadForkParams>),
+                        threadId: resolveRpcThreadId(params.threadId),
+                        persistExtendedHistory: params.persistExtendedHistory === true
+                    };
+                    return await appServerClient.forkThread(forkParams);
+                }
+
+                case 'thread/archive': {
+                    const archiveParams: ThreadArchiveParams = {
+                        threadId: resolveRpcThreadId(params.threadId)
+                    };
+                    return await appServerClient.archiveThread(archiveParams);
+                }
+
+                case 'thread/unarchive': {
+                    const unarchiveParams: ThreadUnarchiveParams = {
+                        threadId: resolveRpcThreadId(params.threadId)
+                    };
+                    return await appServerClient.unarchiveThread(unarchiveParams);
+                }
+
+                case 'thread/rollback': {
+                    const numTurns = asNumber(params.numTurns);
+                    if (numTurns === null || !Number.isInteger(numTurns) || numTurns < 1) {
+                        throw new Error('thread/rollback requires numTurns >= 1');
+                    }
+                    const rollbackParams: ThreadRollbackParams = {
+                        threadId: resolveRpcThreadId(params.threadId),
+                        numTurns
+                    };
+                    return await appServerClient.rollbackThread(rollbackParams);
+                }
+
+                case 'turn/steer': {
+                    const input = Array.isArray(params.input) ? params.input : null;
+                    if (!input || input.length === 0) {
+                        throw new Error('turn/steer requires non-empty input');
+                    }
+                    const steerParams: TurnSteerParams = {
+                        threadId: resolveRpcThreadId(params.threadId),
+                        input: input as TurnSteerParams['input'],
+                        expectedTurnId: resolveRpcTurnId(params.expectedTurnId)
+                    };
+                    const response = await appServerClient.steerTurn(steerParams);
+                    this.currentTurnId = response.turnId;
+                    return response;
+                }
+
+                case 'review/start': {
+                    const target = asRecord(params.target);
+                    if (!target) {
+                        throw new Error('review/start requires a target');
+                    }
+                    const threadId = resolveRpcThreadId(params.threadId);
+                    const reviewParams: ReviewStartParams = {
+                        ...(params as Partial<ReviewStartParams>),
+                        threadId,
+                        target: target as ReviewStartParams['target']
+                    };
+                    const response = await appServerClient.startReview(reviewParams);
+                    const reviewTurn = asRecord(response.turn);
+                    const reviewTurnId = asString(reviewTurn?.id);
+                    if (reviewTurnId && response.reviewThreadId === threadId) {
+                        this.currentTurnId = reviewTurnId;
+                    }
+                    return response;
+                }
+            }
+        });
+
         let hasThread = false;
         let pending: QueuedMessage | null = null;
 
@@ -687,18 +861,46 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     },
                     cliOverrides: session.codexCliOverrides
                 });
-                turnInFlight = true;
-                allowAnonymousTerminalEvent = false;
-                const turnResponse = await appServerClient.startTurn(turnParams, {
-                    signal: this.abortController.signal
-                });
-                const turnRecord = asRecord(turnResponse);
-                const turn = turnRecord ? asRecord(turnRecord.turn) : null;
-                const turnId = asString(turn?.id);
-                if (turnId) {
-                    this.currentTurnId = turnId;
-                } else if (!this.currentTurnId) {
-                    allowAnonymousTerminalEvent = true;
+
+                const shouldSteerActiveTurn = turnInFlight && Boolean(this.currentTurnId);
+                if (shouldSteerActiveTurn) {
+                    try {
+                        const steerResponse = await appServerClient.steerTurn({
+                            threadId: this.currentThreadId,
+                            expectedTurnId: this.currentTurnId!,
+                            input: turnParams.input
+                        });
+                        this.currentTurnId = steerResponse.turnId;
+                        messageBuffer.addMessage('Added follow-up to active turn', 'status');
+                    } catch (error) {
+                        const isAbortError = error instanceof Error && error.name === 'AbortError';
+                        if (isAbortError) {
+                            throw error;
+                        }
+
+                        const errorMessage = error instanceof Error ? error.message : String(error);
+                        logger.warn(`[Codex] Failed to steer active turn ${this.currentTurnId}: ${errorMessage}`);
+                        messageBuffer.addMessage(`Unable to add follow-up: ${errorMessage}`, 'status');
+                        session.sendSessionEvent({
+                            type: 'message',
+                            message: `Unable to add follow-up: ${errorMessage}`
+                        });
+                        continue;
+                    }
+                } else {
+                    turnInFlight = true;
+                    allowAnonymousTerminalEvent = false;
+                    const turnResponse = await appServerClient.startTurn(turnParams, {
+                        signal: this.abortController.signal
+                    });
+                    const turnRecord = asRecord(turnResponse);
+                    const turn = turnRecord ? asRecord(turnRecord.turn) : null;
+                    const turnId = asString(turn?.id);
+                    if (turnId) {
+                        this.currentTurnId = turnId;
+                    } else if (!this.currentTurnId) {
+                        allowAnonymousTerminalEvent = true;
+                    }
                 }
             } catch (error) {
                 logger.warn('Error in codex session:', error);

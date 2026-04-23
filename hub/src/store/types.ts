@@ -61,6 +61,15 @@ export type StoredPushSubscription = {
     createdAt: number
 }
 
+export type StoredProject = {
+    id: string
+    namespace: string
+    path: string
+    name: string | null
+    createdAt: number
+    updatedAt: number
+}
+
 export type VersionedUpdateResult<T> =
     | { result: 'success'; version: number; value: T }
     | { result: 'version-mismatch'; version: number; value: T }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import type { SessionSummary } from '@/types/api'
+import type { CodexSessionSummary, ProjectSummary, SessionSummary } from '@/types/api'
 import type { ApiClient } from '@/api/client'
 import { useLongPress } from '@/hooks/useLongPress'
 import { usePlatform } from '@/hooks/usePlatform'
@@ -9,9 +9,12 @@ import { SessionActionMenu } from '@/components/SessionActionMenu'
 import { RenameSessionDialog } from '@/components/RenameSessionDialog'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { CopyIcon, CheckIcon } from '@/components/icons'
+import { getProjectPath, getSessionProjectPath } from '@/lib/project-path'
 import { queryKeys } from '@/lib/query-keys'
 import { useToast } from '@/lib/toast-context'
 import { useTranslation } from '@/lib/use-translation'
+
+type DisplaySessionSummary = SessionSummary | CodexSessionSummary
 
 type SessionGroup = {
     key: string
@@ -21,6 +24,7 @@ type SessionGroup = {
     sessions: SessionSummary[]
     latestUpdatedAt: number
     hasActiveSession: boolean
+    projectName: string | null
 }
 
 type MachineGroup = {
@@ -42,9 +46,28 @@ function getGroupDisplayName(directory: string): string {
 
 export const UNKNOWN_MACHINE_ID = '__unknown__'
 
-export function deduplicateSessionsByAgentId(sessions: SessionSummary[], selectedSessionId?: string | null): SessionSummary[] {
-    const byAgentId = new Map<string, SessionSummary[]>()
-    const result: SessionSummary[] = []
+function isCodexHistorySession(session: DisplaySessionSummary): session is CodexSessionSummary {
+    return 'listSource' in session && session.listSource === 'codex-history'
+}
+
+function getActionSessionId(session: DisplaySessionSummary): string | null {
+    if (isCodexHistorySession(session)) {
+        return session.attachedSessionId
+    }
+    return session.id
+}
+
+function supportsCodexThreadLifecycleActions(session: DisplaySessionSummary): session is CodexSessionSummary {
+    return isCodexHistorySession(session)
+        && Boolean(session.attachedSessionId)
+        && session.metadata?.flavor === 'codex'
+        && session.metadata?.source !== 'native-attached'
+        && session.codexSessionId.trim().length > 0
+}
+
+export function deduplicateSessionsByAgentId(sessions: DisplaySessionSummary[], selectedSessionId?: string | null): DisplaySessionSummary[] {
+    const byAgentId = new Map<string, DisplaySessionSummary[]>()
+    const result: DisplaySessionSummary[] = []
 
     for (const session of sessions) {
         const agentId = session.metadata?.agentSessionId
@@ -75,21 +98,70 @@ export function deduplicateSessionsByAgentId(sessions: SessionSummary[], selecte
     return result
 }
 
-function groupSessionsByDirectory(sessions: SessionSummary[]): SessionGroup[] {
-    const groups = new Map<string, { directory: string; machineId: string | null; sessions: SessionSummary[] }>()
+function groupSessionsByDirectory(
+    sessions: DisplaySessionSummary[],
+    projects: ProjectSummary[]
+): SessionGroup[] {
+    const groups = new Map<string, {
+        directory: string
+        machineId: string | null
+        sessions: DisplaySessionSummary[]
+        projectName: string | null
+        latestUpdatedAt: number
+    }>()
+    const groupedProjectPaths = new Set<string>()
 
     sessions.forEach(session => {
-        const path = session.metadata?.worktree?.basePath ?? session.metadata?.path ?? 'Other'
+        const path = getSessionProjectPath(session) ?? 'Other'
         const machineId = session.metadata?.machineId ?? null
         const key = `${machineId ?? UNKNOWN_MACHINE_ID}::${path}`
         if (!groups.has(key)) {
             groups.set(key, {
                 directory: path,
                 machineId,
-                sessions: []
+                sessions: [],
+                projectName: null,
+                latestUpdatedAt: 0
             })
         }
-        groups.get(key)!.sessions.push(session)
+        const group = groups.get(key)!
+        group.sessions.push(session)
+        if (session.updatedAt > group.latestUpdatedAt) {
+            group.latestUpdatedAt = session.updatedAt
+        }
+        if (path !== 'Other') {
+            groupedProjectPaths.add(path)
+        }
+    })
+
+    projects.forEach(project => {
+        const path = getProjectPath(project)
+        const matchingGroups = Array.from(groups.values()).filter((group) => group.directory === path)
+
+        if (matchingGroups.length > 0) {
+            for (const group of matchingGroups) {
+                if (!group.projectName && project.name) {
+                    group.projectName = project.name
+                }
+                if (project.updatedAt > group.latestUpdatedAt) {
+                    group.latestUpdatedAt = project.updatedAt
+                }
+            }
+            return
+        }
+
+        if (groupedProjectPaths.has(path)) {
+            return
+        }
+
+        const key = `${UNKNOWN_MACHINE_ID}::${path}`
+        groups.set(key, {
+            directory: path,
+            machineId: null,
+            sessions: [],
+            projectName: project.name,
+            latestUpdatedAt: project.updatedAt
+        })
     })
 
     return Array.from(groups.entries())
@@ -100,12 +172,9 @@ function groupSessionsByDirectory(sessions: SessionSummary[]): SessionGroup[] {
                 if (rankA !== rankB) return rankA - rankB
                 return b.updatedAt - a.updatedAt
             })
-            const latestUpdatedAt = group.sessions.reduce(
-                (max, s) => (s.updatedAt > max ? s.updatedAt : max),
-                -Infinity
-            )
+            const latestUpdatedAt = group.latestUpdatedAt
             const hasActiveSession = group.sessions.some(s => s.active)
-            const displayName = getGroupDisplayName(group.directory)
+            const displayName = group.projectName?.trim() || getGroupDisplayName(group.directory)
 
             return {
                 key,
@@ -114,7 +183,8 @@ function groupSessionsByDirectory(sessions: SessionSummary[]): SessionGroup[] {
                 machineId: group.machineId,
                 sessions: sortedSessions,
                 latestUpdatedAt,
-                hasActiveSession
+                hasActiveSession,
+                projectName: group.projectName
             }
         })
         .sort((a, b) => {
@@ -259,7 +329,7 @@ function ChevronIcon(props: { className?: string; collapsed?: boolean }) {
     )
 }
 
-function getSessionTitle(session: SessionSummary): string {
+function getSessionTitle(session: DisplaySessionSummary): string {
     if (session.metadata?.name) {
         return session.metadata.name
     }
@@ -273,7 +343,7 @@ function getSessionTitle(session: SessionSummary): string {
     return session.id.slice(0, 8)
 }
 
-function getTodoProgress(session: SessionSummary): { completed: number; total: number } | null {
+function getTodoProgress(session: DisplaySessionSummary): { completed: number; total: number } | null {
     if (!session.todoProgress) return null
     if (session.todoProgress.completed === session.todoProgress.total) return null
     return session.todoProgress
@@ -350,8 +420,8 @@ function formatRelativeTime(value: number, t: (key: string, params?: Record<stri
 }
 
 function SessionItem(props: {
-    session: SessionSummary
-    onSelect: (sessionId: string) => void
+    session: DisplaySessionSummary
+    onSelect: (session: DisplaySessionSummary) => void
     showPath?: boolean
     api: ApiClient | null
     selected?: boolean
@@ -364,39 +434,60 @@ function SessionItem(props: {
     const [menuAnchorPoint, setMenuAnchorPoint] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
     const [renameOpen, setRenameOpen] = useState(false)
     const [archiveOpen, setArchiveOpen] = useState(false)
+    const [unarchiveOpen, setUnarchiveOpen] = useState(false)
     const [deleteOpen, setDeleteOpen] = useState(false)
+    const actionSessionId = getActionSessionId(s)
+    const hasSessionActions = Boolean(actionSessionId)
+    const codexThreadLifecycleSupported = supportsCodexThreadLifecycleActions(s)
 
-    const { archiveSession, forkSession, renameSession, deleteSession, isPending } = useSessionActions(
+    const { archiveSession, unarchiveSession, forkSession, renameSession, deleteSession, isPending } = useSessionActions(
         api,
-        s.id,
-        s.metadata?.flavor ?? null
+        actionSessionId,
+        s.metadata?.flavor ?? null,
+        undefined,
+        codexThreadLifecycleSupported
+            ? {
+                codexThreadId: s.codexSessionId,
+                sessionSource: s.metadata?.source ?? null,
+                sessionActive: s.active
+            }
+            : undefined
     )
 
     const handleFork = async () => {
+        if (!actionSessionId) {
+            return
+        }
         try {
             const nextSessionId = await forkSession()
             haptic.notification('success')
-            onSelect(nextSessionId)
+            onSelect({
+                ...s,
+                id: nextSessionId
+            })
         } catch (error) {
             haptic.notification('error')
             addToast({
                 title: t('session.forkFailed.title'),
                 body: error instanceof Error ? error.message : t('session.forkFailed.body'),
-                sessionId: s.id,
-                url: `/sessions/${s.id}`
+                sessionId: actionSessionId,
+                url: `/sessions/${actionSessionId}`
             })
         }
     }
 
     const longPressHandlers = useLongPress({
         onLongPress: (point) => {
+            if (!hasSessionActions) {
+                return
+            }
             haptic.impact('medium')
             setMenuAnchorPoint(point)
             setMenuOpen(true)
         },
         onClick: () => {
             if (!menuOpen) {
-                onSelect(s.id)
+                onSelect(s)
             }
         },
         threshold: 500
@@ -459,12 +550,13 @@ function SessionItem(props: {
             </button>
 
             <SessionActionMenu
-                isOpen={menuOpen}
+                isOpen={hasSessionActions && menuOpen}
                 onClose={() => setMenuOpen(false)}
                 sessionActive={s.active}
-                onFork={s.metadata?.path ? handleFork : undefined}
+                onFork={hasSessionActions && s.metadata?.path ? handleFork : undefined}
                 onRename={() => setRenameOpen(true)}
-                onArchive={s.archived ? undefined : () => setArchiveOpen(true)}
+                onArchive={hasSessionActions && !s.archived ? () => setArchiveOpen(true) : undefined}
+                onUnarchive={codexThreadLifecycleSupported && s.archived ? () => setUnarchiveOpen(true) : undefined}
                 onDelete={() => setDeleteOpen(true)}
                 anchorPoint={menuAnchorPoint}
             />
@@ -480,13 +572,27 @@ function SessionItem(props: {
             <ConfirmDialog
                 isOpen={archiveOpen}
                 onClose={() => setArchiveOpen(false)}
-                title={t('dialog.archive.title')}
-                description={t('dialog.archive.description', { name: sessionName })}
-                confirmLabel={t('dialog.archive.confirm')}
-                confirmingLabel={t('dialog.archive.confirming')}
+                title={t(codexThreadLifecycleSupported ? 'dialog.archiveCodexThread.title' : 'dialog.archive.title')}
+                description={t(
+                    codexThreadLifecycleSupported ? 'dialog.archiveCodexThread.description' : 'dialog.archive.description',
+                    { name: sessionName }
+                )}
+                confirmLabel={t(codexThreadLifecycleSupported ? 'dialog.archiveCodexThread.confirm' : 'dialog.archive.confirm')}
+                confirmingLabel={t(codexThreadLifecycleSupported ? 'dialog.archiveCodexThread.confirming' : 'dialog.archive.confirming')}
                 onConfirm={archiveSession}
                 isPending={isPending}
                 destructive
+            />
+
+            <ConfirmDialog
+                isOpen={unarchiveOpen}
+                onClose={() => setUnarchiveOpen(false)}
+                title={t('dialog.unarchive.title')}
+                description={t('dialog.unarchive.description', { name: sessionName })}
+                confirmLabel={t('dialog.unarchive.confirm')}
+                confirmingLabel={t('dialog.unarchive.confirming')}
+                onConfirm={unarchiveSession}
+                isPending={isPending}
             />
 
             <ConfirmDialog
@@ -505,8 +611,9 @@ function SessionItem(props: {
 }
 
 export function SessionList(props: {
-    sessions: SessionSummary[]
-    onSelect: (sessionId: string) => void
+    sessions: DisplaySessionSummary[]
+    projects?: ProjectSummary[]
+    onSelect: (session: DisplaySessionSummary) => void
     onNewSession: () => void
     onRefresh: () => void
     isLoading: boolean
@@ -515,6 +622,7 @@ export function SessionList(props: {
     machineLabelsById?: Record<string, string>
     selectedSessionId?: string | null
     emptyLabel?: string
+    focusedProjectPath?: string | null
 }) {
     const { t } = useTranslation()
     const { renderHeader = true, api, selectedSessionId, machineLabelsById = {} } = props
@@ -522,8 +630,11 @@ export function SessionList(props: {
     const { haptic } = usePlatform()
     const { addToast } = useToast()
     const groups = useMemo(
-        () => groupSessionsByDirectory(deduplicateSessionsByAgentId(props.sessions, selectedSessionId)),
-        [props.sessions, selectedSessionId]
+        () => groupSessionsByDirectory(
+            deduplicateSessionsByAgentId(props.sessions, selectedSessionId),
+            props.projects ?? []
+        ),
+        [props.projects, props.sessions, selectedSessionId]
     )
     const [collapseOverrides, setCollapseOverrides] = useState<Map<string, boolean>>(
         () => new Map()
@@ -532,9 +643,12 @@ export function SessionList(props: {
         const override = collapseOverrides.get(group.key)
         if (override !== undefined) return override
         const hasSelectedSession = selectedSessionId
-            ? group.sessions.some(session => session.id === selectedSessionId)
+            ? group.sessions.some(session => session.id === selectedSessionId || getActionSessionId(session) === selectedSessionId)
             : false
-        return !group.hasActiveSession && !hasSelectedSession
+        const isFocusedProject = props.focusedProjectPath
+            ? group.directory === props.focusedProjectPath
+            : false
+        return !group.hasActiveSession && !hasSelectedSession && !isFocusedProject
     }
 
     const toggleGroup = (groupKey: string, isCollapsed: boolean) => {
@@ -567,10 +681,36 @@ export function SessionList(props: {
             }
             return await api.forkSession(input.sessionId, { directory: input.directory })
         },
-        onSuccess: async (sessionId) => {
+        onSuccess: async (sessionId, input) => {
             haptic.notification('success')
-            await queryClient.invalidateQueries({ queryKey: queryKeys.sessions })
-            props.onSelect(sessionId)
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: queryKeys.sessions }),
+                queryClient.invalidateQueries({ queryKey: queryKeys.codexSessions })
+            ])
+            const sourceSession = props.sessions.find((session) => getActionSessionId(session) === input.sessionId)
+            if (sourceSession) {
+                props.onSelect({
+                    ...sourceSession,
+                    id: sessionId
+                })
+                return
+            }
+            props.onSelect({
+                id: sessionId,
+                active: false,
+                thinking: false,
+                activeAt: Date.now(),
+                updatedAt: Date.now(),
+                metadata: {
+                    path: input.directory,
+                    flavor: 'codex'
+                },
+                todoProgress: null,
+                pendingRequestsCount: 0,
+                model: null,
+                effort: null,
+                archived: false
+            })
         },
         onError: (error, input) => {
             haptic.notification('error')
@@ -588,9 +728,12 @@ export function SessionList(props: {
         const override = collapseOverrides.get(key)
         if (override !== undefined) return override
         const hasSelected = selectedSessionId
-            ? mg.projectGroups.some(pg => pg.sessions.some(s => s.id === selectedSessionId))
+            ? mg.projectGroups.some(pg => pg.sessions.some(s => s.id === selectedSessionId || getActionSessionId(s) === selectedSessionId))
             : false
-        return !mg.hasActiveSession && !hasSelected
+        const hasFocusedProject = props.focusedProjectPath
+            ? mg.projectGroups.some((pg) => pg.directory === props.focusedProjectPath)
+            : false
+        return !mg.hasActiveSession && !hasSelected && !hasFocusedProject
     }
 
     const toggleMachine = (mg: MachineGroup) => {
@@ -608,7 +751,7 @@ export function SessionList(props: {
         if (!selectedSessionId) return
         setCollapseOverrides(prev => {
             const group = groups.find(g =>
-                g.sessions.some(s => s.id === selectedSessionId)
+                g.sessions.some(s => s.id === selectedSessionId || getActionSessionId(s) === selectedSessionId)
             )
             if (!group) return prev
             const next = new Map(prev)
@@ -627,6 +770,26 @@ export function SessionList(props: {
             return changed ? next : prev
         })
     }, [selectedSessionId, groups])
+
+    useEffect(() => {
+        if (!props.focusedProjectPath) return
+        setCollapseOverrides(prev => {
+            const group = groups.find((item) => item.directory === props.focusedProjectPath)
+            if (!group) return prev
+            const next = new Map(prev)
+            let changed = false
+            if (prev.has(group.key) && prev.get(group.key)) {
+                next.delete(group.key)
+                changed = true
+            }
+            const machineKey = `machine::${group.machineId ?? UNKNOWN_MACHINE_ID}`
+            if (prev.has(machineKey) && prev.get(machineKey)) {
+                next.delete(machineKey)
+                changed = true
+            }
+            return changed ? next : prev
+        })
+    }, [groups, props.focusedProjectPath])
 
     // Clean up stale collapse overrides
     useEffect(() => {
@@ -706,21 +869,25 @@ export function SessionList(props: {
                                                     <span className="font-medium text-sm truncate flex-1">
                                                         {group.displayName}
                                                     </span>
-                                                    {group.sessions[0] ? (
+                                                    {group.sessions.find((session) => getActionSessionId(session)) ? (
                                                         <button
                                                             type="button"
                                                             className="opacity-70 md:opacity-0 md:group-hover/project:opacity-100 transition-opacity duration-150 shrink-0 p-0.5 rounded text-[var(--app-hint)] hover:text-[var(--app-fg)]"
                                                             title={t('session.action.newInDirectory')}
                                                             onClick={(event) => {
                                                                 event.stopPropagation()
+                                                                const forkSource = group.sessions.find((session) => getActionSessionId(session))
+                                                                if (!forkSource) {
+                                                                    return
+                                                                }
                                                                 void createInDirectoryMutation.mutateAsync({
-                                                                    sessionId: group.sessions[0]!.id,
+                                                                    sessionId: getActionSessionId(forkSource)!,
                                                                     directory: group.directory
                                                                 })
                                                             }}
                                                         >
                                                             {createInDirectoryMutation.isPending
-                                                                && createInDirectoryMutation.variables?.sessionId === group.sessions[0]!.id
+                                                                && createInDirectoryMutation.variables?.sessionId === getActionSessionId(group.sessions.find((session) => getActionSessionId(session))!)
                                                                 && createInDirectoryMutation.variables?.directory === group.directory
                                                                 ? <LoaderIcon className="h-3.5 w-3.5 animate-spin-slow" />
                                                                 : <PlusIcon className="h-3.5 w-3.5" />
@@ -737,16 +904,22 @@ export function SessionList(props: {
                                                 <div className="collapsible-panel" data-open={!isCollapsed || undefined}>
                                                     <div className="collapsible-inner">
                                                     <div className="flex flex-col gap-0.5 ml-3 pl-1 pr-1 py-1">
-                                                        {group.sessions.map((s) => (
-                                                            <SessionItem
-                                                                key={s.id}
-                                                                session={s}
-                                                                onSelect={props.onSelect}
-                                                                showPath={false}
-                                                                api={api}
-                                                                selected={s.id === selectedSessionId}
-                                                            />
-                                                        ))}
+                                                        {group.sessions.length === 0 ? (
+                                                            <div className="px-2 py-2 text-xs text-[var(--app-hint)]">
+                                                                {t('project.empty')}
+                                                            </div>
+                                                        ) : (
+                                                            group.sessions.map((s) => (
+                                                                <SessionItem
+                                                                    key={s.id}
+                                                                    session={s}
+                                                                    onSelect={props.onSelect}
+                                                                    showPath={false}
+                                                                    api={api}
+                                                                    selected={s.id === selectedSessionId || getActionSessionId(s) === selectedSessionId}
+                                                                />
+                                                            ))
+                                                        )}
                                                     </div>
                                                     </div>
                                                 </div>

@@ -16,6 +16,15 @@ describe('AppServerEventConverter', () => {
         expect(events).toEqual([{ type: 'thread_started', thread_id: 'thread-2' }]);
     });
 
+    it('maps thread archive lifecycle notifications', () => {
+        const converter = new AppServerEventConverter();
+
+        expect(converter.handleNotification('thread/archived', { threadId: 'thread-1' }))
+            .toEqual([{ type: 'thread_archived', thread_id: 'thread-1' }]);
+        expect(converter.handleNotification('thread/unarchived', { threadId: 'thread-1' }))
+            .toEqual([{ type: 'thread_unarchived', thread_id: 'thread-1' }]);
+    });
+
     it('maps turn/started and completed statuses', () => {
         const converter = new AppServerEventConverter();
 
@@ -134,6 +143,20 @@ describe('AppServerEventConverter', () => {
 
         const events = converter.handleNotification('turn/diff/updated', { diff: 'diff --git a b' });
         expect(events).toEqual([{ type: 'turn_diff', unified_diff: 'diff --git a b' }]);
+    });
+
+    it('maps review mode items to review lifecycle events', () => {
+        const converter = new AppServerEventConverter();
+
+        const started = converter.handleNotification('item/started', {
+            item: { id: 'review-start', type: 'enteredReviewMode', review: 'current changes' }
+        });
+        const completed = converter.handleNotification('item/completed', {
+            item: { id: 'review-end', type: 'exitedReviewMode', review: 'Looks solid overall.' }
+        });
+
+        expect(started).toEqual([{ type: 'review_started', review: 'current changes' }]);
+        expect(completed).toEqual([{ type: 'review_completed', review: 'Looks solid overall.' }]);
     });
 
     it('unwraps codex/event task lifecycle', () => {

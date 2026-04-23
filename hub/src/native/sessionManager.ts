@@ -1,8 +1,9 @@
+import { Database } from 'bun:sqlite'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { homedir, hostname, platform } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { AGENT_MESSAGE_PAYLOAD_TYPE } from '@hapi/protocol'
 import type { AgentState, DecryptedMessage, Metadata, Session } from '@hapi/protocol/types'
 import {
@@ -32,9 +33,17 @@ const POLL_INTERVAL_MS = 700
 const THINKING_IDLE_MS = 1_500
 const INITIAL_CAPTURE_LINES = '-2000'
 const CODEX_SESSION_ID_SYNC_INTERVAL_MS = 3_000
+const INITIAL_CODEX_SESSION_ID_PERSIST_TIMEOUT_MS = 5_000
+const INITIAL_CODEX_SESSION_ID_POLL_INTERVAL_MS = 200
 const CODEX_SHELL_SNAPSHOT_MAX_AGE_MS = 30_000
+const CODEX_STATE_SQLITE_LOOKBACK_MS = 5_000
+const CODEX_STATE_SQLITE_MATCH_WINDOW_MS = 2 * 60 * 1000
+const CODEX_STATE_SQLITE_AMBIGUITY_THRESHOLD_MS = 1_500
+const CODEX_STATE_SQLITE_MAX_THREADS = 20
 const CODEX_SHELL_SNAPSHOT_DIR = join(homedir(), '.codex', 'shell_snapshots')
 const NATIVE_TRANSCRIPT_USER_ECHO_MAX_AGE_MS = 60_000
+const TMUX_FIELD_SEPARATOR = '::hapi-tmux::'
+const TMUX_SUBMIT_DELAY_MS = 120
 
 export type NativeSessionDiscoverItem = {
     tmuxSession: string
@@ -99,6 +108,14 @@ type NativePendingPermissionRequest = {
     fingerprint: string
     command: string
     createdAt: number
+}
+
+type CodexStateThread = {
+    sessionId: string
+    cwd: string
+    source: string | null
+    createdAtMs: number
+    updatedAtMs: number
 }
 
 type NativeSessionManagerDeps = {
@@ -168,8 +185,28 @@ function normalizeComparableText(value: string): string {
     return value.trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
+export function inferNativeCommandFromSnapshot(snapshot: string): NativeCommand | null {
+    const normalized = normalizeComparableText(snapshot)
+    if (!normalized) {
+        return null
+    }
+
+    if (
+        normalized.includes('openai codex')
+        || normalized.includes('>_ openai codex')
+    ) {
+        return 'codex'
+    }
+
+    if (normalized.includes('claude code')) {
+        return 'claude'
+    }
+
+    return null
+}
+
 export function parseTmuxPaneLine(line: string): ParsedTmuxPaneLine | null {
-    const [tmuxSession = '', tmuxPane = '', cwd = '', command = ''] = line.trimEnd().split('\t')
+    const [tmuxSession = '', tmuxPane = '', cwd = '', command = ''] = splitTmuxFields(line)
     if (!tmuxSession || !tmuxPane || !cwd || !command) {
         return null
     }
@@ -183,7 +220,7 @@ export function parseTmuxPaneLine(line: string): ParsedTmuxPaneLine | null {
 }
 
 function parseTmuxPaneStateLine(line: string): ParsedTmuxPaneStateLine | null {
-    const [tmuxSession = '', tmuxPane = '', panePidRaw = '', cwd = '', command = ''] = line.trimEnd().split('\t')
+    const [tmuxSession = '', tmuxPane = '', panePidRaw = '', cwd = '', command = ''] = splitTmuxFields(line)
     const panePid = Number.parseInt(panePidRaw, 10)
     if (!tmuxSession || !tmuxPane || !cwd || !command || !Number.isFinite(panePid) || panePid <= 0) {
         return null
@@ -196,6 +233,23 @@ function parseTmuxPaneStateLine(line: string): ParsedTmuxPaneStateLine | null {
         cwd,
         command
     }
+}
+
+function splitTmuxFields(line: string): string[] {
+    const trimmed = line.trimEnd()
+    if (trimmed.includes(TMUX_FIELD_SEPARATOR)) {
+        return trimmed.split(TMUX_FIELD_SEPARATOR)
+    }
+
+    return trimmed.split('\t')
+}
+
+function buildTmuxPaneFormat(options?: { includePid?: boolean }): string {
+    const fields = options?.includePid
+        ? ['#S', '#{pane_id}', '#{pane_pid}', '#{pane_current_path}', '#{pane_current_command}']
+        : ['#S', '#{pane_id}', '#{pane_current_path}', '#{pane_current_command}']
+
+    return fields.join(TMUX_FIELD_SEPARATOR)
 }
 
 function buildNativeSessionTag(tmuxSession: string, tmuxPane: string): string {
@@ -231,6 +285,11 @@ function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => {
         setTimeout(resolve, ms)
     })
+}
+
+function normalizeComparablePath(value: string): string {
+    const normalized = resolve(value).replace(/\\/g, '/').replace(/\/+$/u, '')
+    return normalized || '/'
 }
 
 function sanitizeTmuxSessionName(value: string): string {
@@ -299,8 +358,33 @@ async function runCommand(command: string, args: string[], options?: CommandOpti
     })
 }
 
+function resolveTmuxSocketPath(): string | null {
+    const configured = process.env.HAPI_TMUX_SOCKET?.trim()
+    if (configured) {
+        return configured
+    }
+
+    const uid = process.getuid?.()
+    if (typeof uid !== 'number') {
+        return null
+    }
+
+    for (const candidate of [
+        `/private/tmp/tmux-${uid}/default`,
+        `/tmp/tmux-${uid}/default`
+    ]) {
+        if (existsSync(candidate)) {
+            return candidate
+        }
+    }
+
+    return null
+}
+
 async function runTmux(args: string[], options?: CommandOptions): Promise<string> {
-    return await runCommand('tmux', args, options)
+    const socketPath = resolveTmuxSocketPath()
+    const tmuxArgs = socketPath ? ['-S', socketPath, ...args] : args
+    return await runCommand('tmux', tmuxArgs, options)
 }
 
 type ProcessEntry = {
@@ -372,6 +456,198 @@ async function listOpenFilesForPid(pid: number): Promise<string[]> {
     } catch {
         return []
     }
+}
+
+function listCodexStateSqlitePaths(codexHomeDir: string): string[] {
+    try {
+        return readdirSync(codexHomeDir)
+            .filter((fileName) => /^state(?:_(\d+))?\.sqlite$/u.test(fileName))
+            .sort((left, right) => {
+                const leftVersion = Number.parseInt(left.match(/^state(?:_(\d+))?\.sqlite$/u)?.[1] ?? '0', 10)
+                const rightVersion = Number.parseInt(right.match(/^state(?:_(\d+))?\.sqlite$/u)?.[1] ?? '0', 10)
+                if (leftVersion !== rightVersion) {
+                    return rightVersion - leftVersion
+                }
+
+                try {
+                    return statSync(join(codexHomeDir, right)).mtimeMs - statSync(join(codexHomeDir, left)).mtimeMs
+                } catch {
+                    return 0
+                }
+            })
+            .map((fileName) => join(codexHomeDir, fileName))
+    } catch {
+        return []
+    }
+}
+
+function resolveCodexStateThreadTimeExpressions(db: Database): {
+    createdAtExpr: string
+    updatedAtExpr: string
+    sourceExpr: string
+} | null {
+    try {
+        const columns = new Set(
+            (db.query('PRAGMA table_info(threads)').all() as Array<{ name?: unknown }>)
+                .map((row) => typeof row.name === 'string' ? row.name : '')
+                .filter((name) => name.length > 0)
+        )
+
+        if (!columns.has('id') || !columns.has('cwd')) {
+            return null
+        }
+
+        return {
+            createdAtExpr: columns.has('created_at_ms') ? 'created_at_ms' : 'created_at * 1000',
+            updatedAtExpr: columns.has('updated_at_ms') ? 'updated_at_ms' : 'updated_at * 1000',
+            sourceExpr: columns.has('source') ? 'source' : 'NULL'
+        }
+    } catch {
+        return null
+    }
+}
+
+export function selectCodexSessionIdFromStateThreads(
+    rows: CodexStateThread[],
+    options: {
+        cwd: string
+        attachedAtMs: number
+    }
+): string | null {
+    const targetCwd = normalizeComparablePath(options.cwd)
+
+    const candidates = rows
+        .filter((row) => row.source === null || row.source === 'cli')
+        .filter((row) => normalizeComparablePath(row.cwd) === targetCwd)
+        .map((row) => {
+            const createdAtMs = Number.isFinite(row.createdAtMs) && row.createdAtMs > 0 ? row.createdAtMs : row.updatedAtMs
+            const updatedAtMs = Number.isFinite(row.updatedAtMs) && row.updatedAtMs > 0 ? row.updatedAtMs : createdAtMs
+            const createdDelta = createdAtMs - options.attachedAtMs
+            const updatedDelta = updatedAtMs - options.attachedAtMs
+            const withinWindow = (
+                createdDelta >= -CODEX_STATE_SQLITE_LOOKBACK_MS
+                && createdDelta <= CODEX_STATE_SQLITE_MATCH_WINDOW_MS
+            ) || (
+                updatedDelta >= -CODEX_STATE_SQLITE_LOOKBACK_MS
+                && updatedDelta <= CODEX_STATE_SQLITE_MATCH_WINDOW_MS
+            )
+
+            if (!withinWindow) {
+                return null
+            }
+
+            const score = Math.min(Math.abs(createdDelta), Math.abs(updatedDelta))
+                + (createdDelta < 0 ? CODEX_STATE_SQLITE_AMBIGUITY_THRESHOLD_MS : 0)
+
+            return {
+                sessionId: row.sessionId,
+                createdAtMs,
+                updatedAtMs,
+                score
+            }
+        })
+        .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+        .sort((left, right) => {
+            if (left.score !== right.score) {
+                return left.score - right.score
+            }
+            if (left.createdAtMs !== right.createdAtMs) {
+                return left.createdAtMs - right.createdAtMs
+            }
+            return right.updatedAtMs - left.updatedAtMs
+        })
+
+    if (candidates.length === 0) {
+        return null
+    }
+
+    const best = candidates[0]
+    if (!best) {
+        return null
+    }
+
+    const nextDistinct = candidates.find((candidate) => candidate.sessionId !== best.sessionId)
+    if (!nextDistinct) {
+        return best.sessionId
+    }
+
+    return nextDistinct.score - best.score > CODEX_STATE_SQLITE_AMBIGUITY_THRESHOLD_MS
+        ? best.sessionId
+        : null
+}
+
+export function resolveCodexSessionIdFromStateSqlite(options: {
+    cwd: string
+    attachedAtMs?: number
+    codexHomeDir?: string
+}): string | null {
+    if (!options.attachedAtMs || !options.cwd.trim()) {
+        return null
+    }
+
+    const codexHomeDir = options.codexHomeDir?.trim() || process.env.CODEX_HOME || join(homedir(), '.codex')
+    const stateDbPaths = listCodexStateSqlitePaths(codexHomeDir)
+    if (stateDbPaths.length === 0) {
+        return null
+    }
+
+    const lowerBound = Math.max(0, options.attachedAtMs - CODEX_STATE_SQLITE_LOOKBACK_MS)
+    const upperBound = options.attachedAtMs + CODEX_STATE_SQLITE_MATCH_WINDOW_MS
+
+    for (const stateDbPath of stateDbPaths) {
+        let db: Database | null = null
+
+        try {
+            db = new Database(stateDbPath, { readonly: true, strict: true })
+            const expressions = resolveCodexStateThreadTimeExpressions(db)
+            if (!expressions) {
+                continue
+            }
+
+            const rows = db.query(`
+                SELECT
+                    id,
+                    cwd,
+                    ${expressions.sourceExpr} AS source,
+                    ${expressions.createdAtExpr} AS createdAtMs,
+                    ${expressions.updatedAtExpr} AS updatedAtMs
+                FROM threads
+                WHERE ${expressions.updatedAtExpr} >= ?
+                  AND ${expressions.createdAtExpr} <= ?
+                ORDER BY ${expressions.updatedAtExpr} DESC
+                LIMIT ${CODEX_STATE_SQLITE_MAX_THREADS}
+            `).all(lowerBound, upperBound) as Array<{
+                id: string
+                cwd: string
+                source: string | null
+                createdAtMs: number
+                updatedAtMs: number
+            }>
+
+            const sessionId = selectCodexSessionIdFromStateThreads(
+                rows.map((row) => ({
+                    sessionId: row.id,
+                    cwd: row.cwd,
+                    source: row.source,
+                    createdAtMs: row.createdAtMs,
+                    updatedAtMs: row.updatedAtMs
+                })),
+                {
+                    cwd: options.cwd,
+                    attachedAtMs: options.attachedAtMs
+                }
+            )
+
+            if (sessionId) {
+                return sessionId
+            }
+        } catch {
+        } finally {
+            db?.close()
+        }
+    }
+
+    return null
 }
 
 export function extractCodexSessionIdFromFilePath(filePath: string): string | null {
@@ -468,7 +744,7 @@ async function listTmuxPanes(): Promise<AttachableTmuxPane[]> {
         'list-panes',
         '-a',
         '-F',
-        '#S\t#{pane_id}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}'
+        buildTmuxPaneFormat({ includePid: true })
     ])
 
     const panes = await Promise.all(stdout
@@ -498,21 +774,85 @@ async function listTmuxPanes(): Promise<AttachableTmuxPane[]> {
 }
 
 async function getTmuxPaneState(tmuxPane: string): Promise<TmuxPaneState | null> {
+    let parsed: ParsedTmuxPaneStateLine | null = null
+
     try {
         const stdout = await runTmux([
             'display-message',
             '-p',
             '-t',
             tmuxPane,
-            '#S\t#{pane_id}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}'
+            buildTmuxPaneFormat({ includePid: true })
         ])
 
-        const parsed = parseTmuxPaneStateLine(stdout)
+        parsed = parseTmuxPaneStateLine(stdout)
+    } catch {
+        return null
+    }
+
+    if (!parsed) {
+        return null
+    }
+
+    let command: NativeCommand | null = null
+    try {
+        command = await resolveTmuxPaneCommand(parsed.command, parsed.panePid)
+    } catch {
+    }
+
+    if (!command) {
+        try {
+            command = inferNativeCommandFromSnapshot(await captureTmuxPane(tmuxPane))
+        } catch {
+        }
+    }
+
+    return {
+        tmuxSession: parsed.tmuxSession,
+        tmuxPane: parsed.tmuxPane,
+        panePid: parsed.panePid,
+        cwd: parsed.cwd,
+        rawCommand: parsed.command,
+        command
+    }
+}
+
+async function getTmuxSessionPaneState(tmuxSession: string): Promise<TmuxPaneState | null> {
+    try {
+        const stdout = await runTmux([
+            'list-panes',
+            '-t',
+            tmuxSession,
+            '-F',
+            buildTmuxPaneFormat({ includePid: true })
+        ])
+
+        const firstLine = stdout
+            .split('\n')
+            .map((line) => line.trim())
+            .find((line) => line.length > 0)
+
+        if (!firstLine) {
+            return null
+        }
+
+        const parsed = parseTmuxPaneStateLine(firstLine)
         if (!parsed) {
             return null
         }
 
-        const command = await resolveTmuxPaneCommand(parsed.command, parsed.panePid)
+        let command: NativeCommand | null = null
+        try {
+            command = await resolveTmuxPaneCommand(parsed.command, parsed.panePid)
+        } catch {
+        }
+
+        if (!command) {
+            try {
+                command = inferNativeCommandFromSnapshot(await captureTmuxPane(parsed.tmuxPane))
+            } catch {
+            }
+        }
 
         return {
             tmuxSession: parsed.tmuxSession,
@@ -542,6 +882,42 @@ async function getTmuxPane(tmuxPane: string): Promise<TmuxPane | null> {
     }
 }
 
+function resolveKnownNativePaneCommand(state: TmuxPaneState, expectedCommand: EnabledNativeCommand): EnabledNativeCommand | null {
+    if (state.command === expectedCommand) {
+        return expectedCommand
+    }
+
+    // npm-installed Codex often shows up as a foreground `node` process in tmux.
+    // Once a session is already bound to Codex, treat that raw command as the
+    // same agent so resume/poll can survive launchd-specific process quirks.
+    const rawCommand = basename(state.rawCommand.trim().toLowerCase())
+    if (expectedCommand === 'codex' && rawCommand === 'node') {
+        return 'codex'
+    }
+
+    return null
+}
+
+async function getKnownTmuxPane(tmuxPane: string, expectedCommand: EnabledNativeCommand): Promise<TmuxPane | null> {
+    const state = await getTmuxPaneState(tmuxPane)
+    if (!state) {
+        return null
+    }
+
+    const command = resolveKnownNativePaneCommand(state, expectedCommand)
+    if (!command) {
+        return null
+    }
+
+    return {
+        tmuxSession: state.tmuxSession,
+        tmuxPane: state.tmuxPane,
+        panePid: state.panePid,
+        cwd: state.cwd,
+        command
+    }
+}
+
 async function getFirstTmuxPane(tmuxSession: string): Promise<ParsedTmuxPaneLine | null> {
     try {
         const stdout = await runTmux([
@@ -549,7 +925,7 @@ async function getFirstTmuxPane(tmuxSession: string): Promise<ParsedTmuxPaneLine
             '-t',
             tmuxSession,
             '-F',
-            '#S\t#{pane_id}\t#{pane_current_path}\t#{pane_current_command}'
+            buildTmuxPaneFormat()
         ])
 
         const firstLine = stdout
@@ -565,6 +941,20 @@ async function getFirstTmuxPane(tmuxSession: string): Promise<ParsedTmuxPaneLine
     } catch {
         return null
     }
+}
+
+async function waitForFirstTmuxPane(tmuxSession: string, timeoutMs: number): Promise<ParsedTmuxPaneLine | null> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+        const pane = await getFirstTmuxPane(tmuxSession)
+        if (pane) {
+            return pane
+        }
+
+        await sleep(100)
+    }
+
+    return null
 }
 
 async function waitForTmuxPaneCommand(
@@ -605,6 +995,9 @@ async function sendTmuxInput(tmuxPane: string, text: string): Promise<void> {
     try {
         await runTmux(['load-buffer', '-b', bufferName, '-'], { stdin: text })
         await runTmux(['paste-buffer', '-d', '-b', bufferName, '-t', tmuxPane])
+        // Full-screen TUIs like Codex can swallow an immediate Enter that lands in
+        // the same paste burst. Give the app one frame to ingest pasted input.
+        await sleep(TMUX_SUBMIT_DELAY_MS)
         await runTmux(['send-keys', '-t', tmuxPane, 'Enter'])
     } finally {
         try {
@@ -763,7 +1156,7 @@ export class NativeSessionManager {
         })
 
         await this.startTracking(session, pane)
-        return session
+        return await this.waitForPersistedCodexSessionId(session.id, INITIAL_CODEX_SESSION_ID_PERSIST_TIMEOUT_MS)
     }
 
     async create(options: {
@@ -791,7 +1184,7 @@ export class NativeSessionManager {
 
         try {
             await runTmux(['new-session', '-d', '-s', tmuxSession, '-c', cwd])
-            pane = await getFirstTmuxPane(tmuxSession)
+            pane = await waitForFirstTmuxPane(tmuxSession, 2_000)
             if (!pane) {
                 throw new Error('Failed to create tmux session')
             }
@@ -816,6 +1209,90 @@ export class NativeSessionManager {
         }
     }
 
+    async openCodexSession(options: {
+        namespace: string
+        cwd: string
+        codexSessionId: string
+        title?: string
+    }): Promise<Session> {
+        await this.ensureLeadership()
+
+        const cwd = options.cwd.trim()
+        const codexSessionId = options.codexSessionId.trim()
+        if (!cwd) {
+            throw new Error('Directory is required')
+        }
+        if (!codexSessionId) {
+            throw new Error('Codex session ID is required')
+        }
+
+        const existing = this.deps.getSessionsByNamespace(options.namespace)
+            .filter((session) =>
+                session.metadata?.source === 'native-attached'
+                && session.metadata?.codexSessionId === codexSessionId
+                && normalizeComparablePath(session.metadata.path) === normalizeComparablePath(cwd)
+            )
+            .sort((left, right) => {
+                if (left.active !== right.active) {
+                    return left.active ? -1 : 1
+                }
+                return right.updatedAt - left.updatedAt
+            })[0]
+
+        if (existing) {
+            if (existing.active) {
+                return existing
+            }
+
+            const resumed = await this.resume(existing.id, options.namespace, { allowRestart: true })
+            if (resumed) {
+                return this.deps.getSessionByNamespace(existing.id, options.namespace) ?? existing
+            }
+        }
+
+        ensureDirectoryExists(cwd)
+
+        const tmuxSession = buildTmuxSessionName(cwd, options.title)
+
+        try {
+            await runTmux(['new-session', '-d', '-s', tmuxSession, '-c', cwd])
+            const pane = await waitForFirstTmuxPane(tmuxSession, 2_000)
+            if (!pane) {
+                throw new Error('Failed to create tmux session')
+            }
+
+            await sendTmuxCommand(pane.tmuxPane, buildCodexResumeCommand(codexSessionId))
+            const resumedPane = await waitForTmuxPaneCommand(tmuxSession, pane.tmuxPane, 'codex', 10_000)
+            if (!resumedPane) {
+                throw new Error('Timed out waiting for codex resume to start in tmux')
+            }
+
+            let session = await this.attach({
+                namespace: options.namespace,
+                tmuxSession,
+                tmuxPane: resumedPane.tmuxPane,
+                agent: 'codex',
+                title: options.title
+            })
+
+            if (session.metadata?.codexSessionId !== codexSessionId) {
+                session = this.deps.updateSessionMetadata(session.id, this.buildMetadata({
+                    cwd,
+                    tmuxSession: resumedPane.tmuxSession,
+                    tmuxPane: resumedPane.tmuxPane,
+                    command: 'codex',
+                    title: options.title,
+                    codexSessionId
+                }), { touchUpdatedAt: false })
+            }
+
+            return session
+        } catch (error) {
+            await killTmuxSession(tmuxSession)
+            throw error
+        }
+    }
+
     async resume(sessionId: string, namespace: string, options?: { allowRestart?: boolean }): Promise<boolean> {
         await this.ensureLeadership()
 
@@ -831,9 +1308,25 @@ export class NativeSessionManager {
             return false
         }
 
-        const pane = await getTmuxPane(native.tmuxPane)
-        if (pane && isEnabledNativeCommand(pane.command)) {
-            await this.startTracking(session, pane)
+        let paneState = await getTmuxPaneState(native.tmuxPane)
+        if (!paneState || paneState.tmuxSession !== native.tmuxSession) {
+            const sessionPaneState = await getTmuxSessionPaneState(native.tmuxSession)
+            if (sessionPaneState) {
+                paneState = sessionPaneState
+            }
+        }
+        const knownPaneCommand = paneState
+            ? resolveKnownNativePaneCommand(paneState, native.command)
+            : null
+
+        if (paneState && knownPaneCommand && isEnabledNativeCommand(knownPaneCommand)) {
+            await this.startTracking(session, {
+                tmuxSession: paneState.tmuxSession,
+                tmuxPane: paneState.tmuxPane,
+                panePid: paneState.panePid,
+                cwd: paneState.cwd,
+                command: knownPaneCommand
+            })
             return true
         }
 
@@ -841,7 +1334,6 @@ export class NativeSessionManager {
             return false
         }
 
-        const paneState = await getTmuxPaneState(native.tmuxPane)
         if (paneState && isShellLikeCommand(paneState.rawCommand)) {
             await sendTmuxCommand(paneState.tmuxPane, buildCodexResumeCommand(session.metadata.codexSessionId))
             const resumedPane = await waitForTmuxPaneCommand(paneState.tmuxSession, paneState.tmuxPane, 'codex', 10_000)
@@ -850,6 +1342,16 @@ export class NativeSessionManager {
                 return true
             }
         }
+
+        console.warn('[NativeSession] resume fell back to tmux restart', {
+            sessionId,
+            tmuxSession: native.tmuxSession,
+            tmuxPane: native.tmuxPane,
+            rawCommand: paneState?.rawCommand ?? null,
+            resolvedCommand: paneState?.command ?? null,
+            knownPaneCommand,
+            paneStateSession: paneState?.tmuxSession ?? null
+        })
 
         const resumedPane = await this.restartIntoNewTmuxSession(session, session.metadata.codexSessionId)
         if (!resumedPane) {
@@ -950,7 +1452,7 @@ export class NativeSessionManager {
 
         try {
             await runTmux(['new-session', '-d', '-s', tmuxSession, '-c', cwd])
-            pane = await getFirstTmuxPane(tmuxSession)
+            pane = await waitForFirstTmuxPane(tmuxSession, 2_000)
             if (!pane) {
                 throw new Error('Failed to create tmux session for native resume')
             }
@@ -1069,7 +1571,16 @@ export class NativeSessionManager {
             throw new Error('Native session metadata missing')
         }
 
-        const pane = await getTmuxPane(session.metadata.native.tmuxPane)
+        const nativeCommand = session.metadata.native.command
+        if (nativeCommand !== 'codex' && nativeCommand !== 'claude') {
+            throw new Error('Native session command unsupported')
+        }
+
+        if (!isEnabledNativeCommand(nativeCommand)) {
+            throw new Error('Native session command unsupported')
+        }
+
+        const pane = await getKnownTmuxPane(session.metadata.native.tmuxPane, nativeCommand)
         if (!pane) {
             throw new Error('tmux pane not found')
         }
@@ -1151,7 +1662,7 @@ export class NativeSessionManager {
         }
 
         try {
-            const pane = await getTmuxPane(tracker.tmuxPane)
+            const pane = await getKnownTmuxPane(tracker.tmuxPane, tracker.command)
             if (!pane || !isEnabledNativeCommand(pane.command)) {
                 this.stopTracking(sessionId, true)
                 return
@@ -1230,7 +1741,7 @@ export class NativeSessionManager {
         tracker: NativeTracker,
         force: boolean = false
     ): Promise<void> {
-        const session = this.deps.getSession(sessionId)
+        let session = this.deps.getSession(sessionId)
         if (!session?.metadata || session.metadata.source !== 'native-attached') {
             return
         }
@@ -1242,11 +1753,23 @@ export class NativeSessionManager {
 
         tracker.lastCodexSessionIdSyncAt = now
 
-        const resolvedCodexSessionId = tracker.transcript.codexSessionId ?? await resolveCodexSessionIdForPane(pane.panePid, {
-            attachedAtMs: session.metadata.native?.attachedAt
+        const sqlitePersistedSession = this.persistCodexSessionIdFromStateSqlite(session)
+        if (sqlitePersistedSession) {
+            session = sqlitePersistedSession
+        }
+
+        const metadata = session.metadata
+        if (!metadata || metadata.source !== 'native-attached') {
+            return
+        }
+
+        const resolvedCodexSessionId = metadata.codexSessionId
+            ?? tracker.transcript.codexSessionId
+            ?? await resolveCodexSessionIdForPane(pane.panePid, {
+            attachedAtMs: metadata.native?.attachedAt
         })
-        const nextCodexSessionId = resolvedCodexSessionId ?? session.metadata.codexSessionId
-        const nativeMetadata = session.metadata.native
+        const nextCodexSessionId = resolvedCodexSessionId ?? metadata.codexSessionId
+        const nativeMetadata = metadata.native
         const shouldUpdateNative = nativeMetadata
             ? nativeMetadata.tmuxSession !== pane.tmuxSession
                 || nativeMetadata.tmuxPane !== pane.tmuxPane
@@ -1254,21 +1777,91 @@ export class NativeSessionManager {
                 || nativeMetadata.attached === false
             : true
 
-        if (nextCodexSessionId === session.metadata.codexSessionId && !shouldUpdateNative) {
+        if (nextCodexSessionId === metadata.codexSessionId && !shouldUpdateNative) {
             return
         }
 
         this.deps.updateSessionMetadata(sessionId, {
-            ...session.metadata,
+            ...metadata,
             codexSessionId: nextCodexSessionId,
             native: {
-                ...session.metadata.native,
+                ...metadata.native,
                 tmuxSession: pane.tmuxSession,
                 tmuxPane: pane.tmuxPane,
                 command: pane.command,
                 attached: true
             }
         }, { touchUpdatedAt: false })
+    }
+
+    private persistCodexSessionIdFromStateSqlite(session: Session): Session | null {
+        if (
+            session.metadata?.source !== 'native-attached'
+            || session.metadata.flavor !== 'codex'
+            || !session.metadata.path
+            || session.metadata.codexSessionId
+        ) {
+            return null
+        }
+
+        const codexSessionId = resolveCodexSessionIdFromStateSqlite({
+            cwd: session.metadata.path,
+            attachedAtMs: session.metadata.native?.attachedAt
+        })
+        if (!codexSessionId) {
+            return null
+        }
+
+        return this.deps.updateSessionMetadata(session.id, {
+            ...session.metadata,
+            codexSessionId,
+            native: {
+                ...session.metadata.native,
+                attached: true
+            }
+        }, { touchUpdatedAt: false })
+    }
+
+    private async waitForPersistedCodexSessionId(
+        sessionId: string,
+        timeoutMs: number,
+        pollIntervalMs: number = INITIAL_CODEX_SESSION_ID_POLL_INTERVAL_MS
+    ): Promise<Session> {
+        let session = this.deps.getSession(sessionId)
+        if (!session) {
+            throw new Error('Native session not found')
+        }
+
+        if (
+            session.metadata?.source !== 'native-attached'
+            || session.metadata.flavor !== 'codex'
+            || session.metadata.codexSessionId
+        ) {
+            return session
+        }
+
+        const sqlitePersistedSession = this.persistCodexSessionIdFromStateSqlite(session)
+        if (sqlitePersistedSession) {
+            return sqlitePersistedSession
+        }
+
+        const deadline = Date.now() + Math.max(0, timeoutMs)
+        const safePollIntervalMs = Math.max(1, pollIntervalMs)
+
+        while (Date.now() < deadline) {
+            const persistedDuringWait = this.persistCodexSessionIdFromStateSqlite(session)
+            if (persistedDuringWait) {
+                return persistedDuringWait
+            }
+
+            await sleep(safePollIntervalMs)
+            session = this.deps.getSession(sessionId) ?? session
+            if (session.metadata?.codexSessionId) {
+                return session
+            }
+        }
+
+        return session
     }
 
     private syncCodexTranscript(sessionId: string, tracker: NativeTracker, snapshot: string): boolean {

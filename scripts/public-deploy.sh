@@ -9,7 +9,11 @@ PID_FILE="$DEPLOY_HOME/hub.pid"
 LOG_DIR="$DEPLOY_HOME/logs"
 LOG_FILE="$LOG_DIR/hub.log"
 DATA_DIR="$DEPLOY_HOME/hapi-home"
+RUNNER_FILE="$DEPLOY_HOME/run-hub.sh"
 LAUNCHD_LABEL="${HAPI_LAUNCHD_LABEL:-com.hapi.hub.public}"
+LAUNCHD_PLIST_DIR="$HOME/Library/LaunchAgents"
+LAUNCHD_PLIST_FILE="$LAUNCHD_PLIST_DIR/$LAUNCHD_LABEL.plist"
+NATIVE_LEADER_PRIORITY="${HAPI_NATIVE_LEADER_PRIORITY:-200}"
 
 # GUI apps, launchd jobs, and non-interactive shells often skip shell rc files.
 # Bootstrap Bun from its default install location so the deploy script is self-contained.
@@ -17,6 +21,12 @@ BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
 if [[ -x "$BUN_INSTALL/bin/bun" ]]; then
     export PATH="$BUN_INSTALL/bin:$PATH"
 fi
+
+for path_entry in /opt/homebrew/bin /usr/local/bin; do
+    if [[ -d "$path_entry" && ":$PATH:" != *":$path_entry:"* ]]; then
+        export PATH="$path_entry:$PATH"
+    fi
+done
 
 DEFAULT_PUBLIC_URL="${HAPI_PUBLIC_URL:-https://hapi.example.com}"
 DEFAULT_LISTEN_HOST="${HAPI_LISTEN_HOST:-127.0.0.1}"
@@ -56,6 +66,14 @@ require_command() {
 
 use_launchd() {
     [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1
+}
+
+launchd_domain() {
+    echo "gui/$(id -u)"
+}
+
+launchd_target() {
+    echo "$(launchd_domain)/$LAUNCHD_LABEL"
 }
 
 launchd_job_pid() {
@@ -98,8 +116,22 @@ generate_token() {
     node -e "console.log(require('node:crypto').randomBytes(24).toString('hex'))"
 }
 
+resolve_bun_bin() {
+    if command -v bun >/dev/null 2>&1; then
+        command -v bun
+        return 0
+    fi
+
+    if [[ -x "$BUN_INSTALL/bin/bun" ]]; then
+        echo "$BUN_INSTALL/bin/bun"
+        return 0
+    fi
+
+    return 1
+}
+
 ensure_dirs() {
-    mkdir -p "$DEPLOY_HOME" "$LOG_DIR" "$DATA_DIR"
+    mkdir -p "$DEPLOY_HOME" "$LOG_DIR" "$DATA_DIR" "$LAUNCHD_PLIST_DIR"
 }
 
 write_env_file() {
@@ -141,6 +173,79 @@ load_env() {
     set +a
 }
 
+write_launch_wrapper() {
+    local bun_bin
+    bun_bin="$(resolve_bun_bin)"
+
+    cat > "$RUNNER_FILE" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+export BUN_INSTALL='$BUN_INSTALL'
+export HAPI_LAUNCHD_LABEL='$LAUNCHD_LABEL'
+export HAPI_NATIVE_LEADER_PRIORITY='$NATIVE_LEADER_PRIORITY'
+
+if [[ -x "\$BUN_INSTALL/bin/bun" ]]; then
+    export PATH="\$BUN_INSTALL/bin:\$PATH"
+fi
+
+for path_entry in /opt/homebrew/bin /usr/local/bin; do
+    if [[ -d "\$path_entry" && ":\$PATH:" != *":\$path_entry:"* ]]; then
+        export PATH="\$path_entry:\$PATH"
+    fi
+done
+
+set -a
+source '$ENV_FILE'
+set +a
+
+cd '$ROOT_DIR'
+exec '$bun_bin' hub/dist/index.js
+EOF
+
+    chmod +x "$RUNNER_FILE"
+}
+
+write_launchd_plist() {
+    cat > "$LAUNCHD_PLIST_FILE" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$LAUNCHD_LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$RUNNER_FILE</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$ROOT_DIR</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>$LOG_FILE</string>
+    <key>StandardErrorPath</key>
+    <string>$LOG_FILE</string>
+</dict>
+</plist>
+EOF
+}
+
+install_launchd_agent() {
+    write_launch_wrapper
+    write_launchd_plist
+}
+
+start_launchd_agent() {
+    launchctl enable "$(launchd_target)" >/dev/null 2>&1 || true
+    launchctl remove "$LAUNCHD_LABEL" >/dev/null 2>&1 || true
+    launchctl bootout "$(launchd_target)" >/dev/null 2>&1 || true
+    launchctl bootstrap "$(launchd_domain)" "$LAUNCHD_PLIST_FILE"
+    launchctl kickstart -k "$(launchd_target)"
+}
+
 build() {
     require_command bun
     (cd "$ROOT_DIR" && bun run build:web && bun run build:hub)
@@ -169,22 +274,17 @@ start() {
     ensure_dirs
     load_env
 
-    if is_running; then
-        if use_launchd && launchd_is_running; then
-            echo "Hub already running with launchd PID $(launchd_job_pid)"
-        else
-            echo "Hub already running with PID $(cat "$PID_FILE")"
-        fi
-        return 0
-    fi
-
     build
 
     if use_launchd; then
-        launchctl remove "$LAUNCHD_LABEL" >/dev/null 2>&1 || true
-        launchctl submit -l "$LAUNCHD_LABEL" -- /bin/zsh -lc "cd '$ROOT_DIR' && set -a && source '$ENV_FILE' && set +a && exec '$BUN_INSTALL/bin/bun' hub/dist/index.js >> '$LOG_FILE' 2>&1"
+        install_launchd_agent
+        start_launchd_agent
         rm -f "$PID_FILE"
     else
+        if is_running; then
+            echo "Hub already running with PID $(cat "$PID_FILE")"
+            return 0
+        fi
         (
             cd "$ROOT_DIR"
             nohup bun --env-file "$ENV_FILE" hub/dist/index.js > "$LOG_FILE" 2>&1 &
@@ -196,6 +296,7 @@ start() {
     if use_launchd && launchd_is_running; then
         echo "Launchd label: $LAUNCHD_LABEL"
         echo "PID: $(launchd_job_pid)"
+        echo "LaunchAgent: $LAUNCHD_PLIST_FILE"
     else
         echo "PID: $(cat "$PID_FILE")"
     fi
@@ -214,7 +315,7 @@ stop() {
 
         local pid
         pid="$(launchd_job_pid)"
-        launchctl remove "$LAUNCHD_LABEL"
+        launchctl bootout "$(launchd_target)" >/dev/null 2>&1 || launchctl remove "$LAUNCHD_LABEL" >/dev/null 2>&1 || true
 
         # launchctl remove is asynchronous enough that an immediate start can race.
         for _ in {1..30}; do
@@ -249,6 +350,11 @@ status() {
         echo "Status: running"
         echo "Launchd label: $LAUNCHD_LABEL"
         echo "PID: $(launchd_job_pid)"
+        echo "LaunchAgent: $LAUNCHD_PLIST_FILE"
+    elif use_launchd && [[ -f "$LAUNCHD_PLIST_FILE" ]]; then
+        echo "Status: stopped"
+        echo "Launchd label: $LAUNCHD_LABEL"
+        echo "LaunchAgent: $LAUNCHD_PLIST_FILE"
     elif is_running; then
         echo "Status: running"
         echo "PID: $(cat "$PID_FILE")"

@@ -219,6 +219,7 @@ export function SessionHeader(props: {
                 onFork={session.metadata?.path ? handleFork : undefined}
                 onRename={() => setRenameOpen(true)}
                 onArchive={isArchivedSession ? undefined : () => setArchiveOpen(true)}
+                onUnarchive={undefined}
                 onDelete={() => setDeleteOpen(true)}
                 anchorPoint={menuAnchorPoint}
                 menuId={menuId}

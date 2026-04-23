@@ -19,6 +19,12 @@ export function useSession(api: ApiClient | null, sessionId: string | null): {
             return await api.getSession(sessionId)
         },
         enabled: Boolean(api && sessionId),
+        retry: (failureCount, error) => {
+            if (error instanceof Error && (error.message.includes('HTTP 404') || error.message.includes('Session not found'))) {
+                return false
+            }
+            return failureCount < 2
+        }
     })
 
     return {
