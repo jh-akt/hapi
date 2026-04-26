@@ -25,6 +25,7 @@ import { useSidebarResize } from '@/hooks/useSidebarResize'
 import { useMessages } from '@/hooks/queries/useMessages'
 import { useMachines } from '@/hooks/queries/useMachines'
 import { useCodexSessions } from '@/hooks/queries/useCodexSessions'
+import { canReadCodexThreadFromAppServer, useCodexThreadMessages } from '@/hooks/queries/useCodexThreadMessages'
 import { useSession } from '@/hooks/queries/useSession'
 import { useProjects } from '@/hooks/queries/useProjects'
 import { useSlashCommands } from '@/hooks/queries/useSlashCommands'
@@ -36,6 +37,7 @@ import { resolveSessionSelectionAction, type DisplaySessionSummary } from '@/lib
 import { useToast } from '@/lib/toast-context'
 import { useTranslation } from '@/lib/use-translation'
 import { fetchLatestMessages, seedMessageWindowFromSession } from '@/lib/message-window-store'
+import { mergeMessages } from '@/lib/messages'
 import { clearDraftsAfterSend } from '@/lib/clearDraftsAfterSend'
 import type { Machine } from '@/types/api'
 import FilesPage from '@/routes/sessions/files'
@@ -173,7 +175,8 @@ function SessionsPage() {
                     const response = await api.openCodexSession({
                         cwd: action.cwd,
                         codexSessionId: action.codexSessionId,
-                        title: action.title
+                        title: action.title,
+                        openStrategy: action.openStrategy
                     })
                     sessionId = response.sessionId
                 } else {
@@ -308,6 +311,10 @@ function SessionPage() {
         error,
         refetch: refetchSession,
     } = useSession(api, sessionId)
+    const prefersCodexThreadRead = canReadCodexThreadFromAppServer(session)
+    const codexThreadMessages = useCodexThreadMessages(api, session, {
+        enabled: prefersCodexThreadRead
+    })
     const {
         messages,
         warning: messagesWarning,
@@ -320,7 +327,9 @@ function SessionPage() {
         messagesVersion,
         flushPending,
         setAtBottom,
-    } = useMessages(api, sessionId)
+    } = useMessages(api, sessionId, {
+        enabled: !prefersCodexThreadRead || codexThreadMessages.shouldFallback
+    })
     const {
         sendMessage,
         retryMessage,
@@ -406,8 +415,12 @@ function SessionPage() {
 
     const refreshSelectedSession = useCallback(() => {
         void refetchSession()
-        void refetchMessages()
-    }, [refetchMessages, refetchSession])
+        if (prefersCodexThreadRead && !codexThreadMessages.shouldFallback) {
+            void codexThreadMessages.refetch()
+        } else {
+            void refetchMessages()
+        }
+    }, [codexThreadMessages, prefersCodexThreadRead, refetchMessages, refetchSession])
 
     if (error) {
         const sessionMissing = error.includes('HTTP 404') || error.includes('Session not found')
@@ -451,21 +464,40 @@ function SessionPage() {
         )
     }
 
+    const useCodexThreadRead = prefersCodexThreadRead && !codexThreadMessages.shouldFallback
+    const liveMessages = useCodexThreadRead && codexThreadMessages.loadedAt !== null
+        ? messages.filter((message) => message.createdAt >= codexThreadMessages.loadedAt!)
+        : []
+    const displayedMessages = useCodexThreadRead
+        ? mergeMessages(codexThreadMessages.messages, liveMessages)
+        : messages
+    const displayedWarning = useCodexThreadRead
+        ? codexThreadMessages.warning
+        : codexThreadMessages.warning
+            ? [messagesWarning, `Codex app-server read failed; using HAPI history. ${codexThreadMessages.warning}`].filter(Boolean).join('\n')
+            : messagesWarning
+    const displayedLoading = useCodexThreadRead ? codexThreadMessages.isLoading : messagesLoading
+    const displayedHasMore = useCodexThreadRead ? false : messagesHasMore
+    const displayedLoadMore = useCodexThreadRead ? async () => {} : loadMoreMessages
+    const displayedMessagesVersion = useCodexThreadRead
+        ? messagesVersion + codexThreadMessages.messages.length
+        : messagesVersion
+
     return (
         <SessionChat
             api={api}
             session={session}
-            messages={messages}
-            messagesWarning={messagesWarning}
-            hasMoreMessages={messagesHasMore}
-            isLoadingMessages={messagesLoading}
+            messages={displayedMessages}
+            messagesWarning={displayedWarning}
+            hasMoreMessages={displayedHasMore}
+            isLoadingMessages={displayedLoading}
             isLoadingMoreMessages={messagesLoadingMore}
             isSending={isSending}
             pendingCount={pendingCount}
-            messagesVersion={messagesVersion}
+            messagesVersion={displayedMessagesVersion}
             onBack={goBack}
             onRefresh={refreshSelectedSession}
-            onLoadMore={loadMoreMessages}
+            onLoadMore={displayedLoadMore}
             onSend={sendMessage}
             onFlushPending={flushPending}
             onAtBottomChange={setAtBottom}

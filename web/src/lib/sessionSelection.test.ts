@@ -25,7 +25,9 @@ function makeCodexSession(
         ...makeSession(overrides),
         attachedSessionId: null,
         listSource: 'codex-history',
-        codexSessionId: overrides.codexSessionId
+        codexSessionId: overrides.codexSessionId,
+        codexOrigin: overrides.codexOrigin ?? 'transcript-fallback',
+        openStrategy: overrides.openStrategy ?? 'open-native-resume'
     }
 }
 
@@ -66,6 +68,8 @@ describe('resolveSessionSelectionAction', () => {
         expect(resolveSessionSelectionAction(makeCodexSession({
             id: 'codex:thread-1',
             codexSessionId: 'thread-1',
+            codexOrigin: 'app-server-thread',
+            openStrategy: 'open-app-server-thread',
             metadata: {
                 path: '/tmp/project',
                 name: 'History thread',
@@ -75,7 +79,8 @@ describe('resolveSessionSelectionAction', () => {
             type: 'open-codex-history',
             cwd: '/tmp/project',
             codexSessionId: 'thread-1',
-            title: 'History thread'
+            title: 'History thread',
+            openStrategy: 'open-app-server-thread'
         })
     })
 

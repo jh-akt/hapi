@@ -200,6 +200,7 @@ Hub 代理的保护逻辑：
 - `web/src/types/api.ts`
 - `web/src/lib/sessionSelection.ts`
 - `web/src/components/SessionList.tsx`
+- `web/src/components/CodexWorkspacePanel.tsx`
 
 Web API client 暴露：
 
@@ -208,6 +209,21 @@ api.codexAppServer(sessionId, method, params)
 ```
 
 类型来自 shared generated protocol。UI 层应该调用更具体的 wrapper 或 mutation，而不是手写 method string 到处散落。
+
+当前 Web 已有的 typed wrapper 覆盖：
+
+- thread：`read/fork/archive/unarchive/rollback/name/set/compact/turns/list`
+- turn：`steer`
+- review：`review/start`
+- management：`skills/list`、`plugin/list/read/install/uninstall`、`app/list`
+- MCP：`mcpServerStatus/list`、`mcpServer/resource/read`、`mcpServer/tool/call`
+- memory：`thread/memoryMode/set`、`memory/reset`
+
+聊天页会挂载 `CodexWorkspacePanel`，提供三组入口：
+
+1. **线程摘要**：基于 `thread/read` 和 `thread/turns/list` 显示 name、status、model、effort、turn count、cwd、CLI、Git。
+2. **Review 展示**：`/review` 成功后保存 `reviewThreadId`，再读取 review thread 的输出、文件变更、命令和 MCP/tool 行。
+3. **管理面板**：展示 Skills、Plugins、Apps、MCP server 状态，并提供 plugin install/uninstall、memory mode、memory reset 的基础操作。
 
 session 点击逻辑：
 
@@ -263,10 +279,28 @@ attached HAPI session
 
 核心文件：
 
+- `web/src/hooks/queries/useCodexThreadMessages.ts`
+- `web/src/lib/codex-thread-messages.ts`
 - `hub/src/native/codexTranscript.ts`
 - `hub/src/sync/messageService.ts`
 
-当前聊天页主要仍渲染 HAPI message store。
+remote Codex 且非 `native-attached` 的聊天页现在优先走 app-server：
+
+```text
+thread/read({ threadId, includeTurns: true })
+  -> thread.turns/items
+  -> codexThreadToMessages(...)
+  -> HappyThread render
+```
+
+生成的 message id 稳定使用 `codex:${threadId}:${turnId}:${itemId || index}`。这些 message 不写回 HAPI message store，避免 transcript sync 和 app-server read 产生重复历史。
+
+以下场景才回落到 HAPI messages + transcript sync：
+
+- app-server read 失败
+- session 是 `native-attached`
+- session offline / inactive
+- metadata 没有 `codexSessionId`
 
 对于 native/desktop Codex session，HAPI 会同步本地 transcript：
 
@@ -287,8 +321,6 @@ attached HAPI session
 - attach 时 snapshot prompt 能命中时加权
 
 这解决了 Codex Desktop / VS Code 来源 transcript 打开后空白的问题。`source=vscode` 和 `originator=Codex Desktop` 现在属于支持范围。
-
-注意：`thread/read` 已经进入 typed gateway 和 web-visible capability，但聊天页并不是完全只靠 `thread/read` 渲染。当前更稳的路径仍是：app-server/catalog 负责发现和打开，transcript sync 负责把原生历史 materialize 到 HAPI messages。
 
 ## HAPI 本地会话的作用
 
@@ -333,10 +365,14 @@ HAPI 的差异化仍然是 self-hosted、PWA/手机远控、本机 attach/create
 - root typecheck 可检测 app-server generated type drift。
 - CLI app-server RPC 扩展到 thread、turn、review、skills、plugins、apps、MCP、memory。
 - Hub 提供 generic `POST /api/sessions/:id/codex/app-server` proxy。
-- Web API client 提供 typed `codexAppServer(...)` helper。
+- Web API client 提供 typed `codexAppServer(...)` helper 和 thread/review/management wrappers。
 - `GET /api/codex-sessions` 合并 attached、app-server thread/list、local transcript catalog。
 - unattached app-server thread 不再被过滤，可以作为 `codex:` placeholder 打开。
 - inactive session 不再灰显；只有 archived session 灰显。
+- 聊天页 remote Codex 主路径优先用 `thread/read` 渲染历史；transcript/message store 只做 fallback。
+- Web action 已接入 fork、archive/unarchive、rollback、rename、compact。
+- Workspace 已有 thread summary pane、Review 基础展示、Codex 管理面板。
+- 文件页已支持 Markdown Preview；terminal 页已支持基础多 tab。
 - Codex Desktop / VS Code transcript 可被识别并同步到 HAPI messages。
 - native/tmux 作为兼容/兜底路线保留。
 
@@ -344,19 +380,13 @@ HAPI 的差异化仍然是 self-hosted、PWA/手机远控、本机 attach/create
 
 仍需要继续推进的部分：
 
-- 聊天主路径完全接入 `thread/read`，并把 transcript scanning 降为 fallback。
-- Web 补齐所有 thread actions 的最终 UI：
-  - fork
-  - archive / unarchive
-  - rollback
-  - compact
-  - steer active turn
-  - rename / metadata
-- review output / PR comments 展示。
-- 多 terminal tabs。
-- thread summary pane。
-- plugins/apps/MCP panel。
-- memory UI。
+- Review output 仍只是基础行展示，缺结构化 findings / PR comments / 文件跳转。
+- plugin detail、MCP resource read、MCP tool call、app detail 仍缺 UI。
+- memory UI 还缺当前模式读取展示。
+- terminal tabs 还缺输出缓存/回放和用户自定义 tab 名。
+- 富文件预览还缺图片、二进制 metadata、超大文件分页。
+- thread metadata/tag/置顶类 UI 仍未接入。
+- steer active turn / interrupt 需要更明确状态和失败文案。
 - automation 列表。
 - MCP elicitation、dynamic tool call、auth refresh 等 server request 的完整 UI 流程。
 - browser/computer use/SSH devbox 仍是 P3，不作为首批 parity 阻塞项。

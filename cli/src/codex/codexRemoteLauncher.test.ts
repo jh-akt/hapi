@@ -120,6 +120,27 @@ vi.mock('./codexAppServerClient', () => {
             };
         }
 
+        async request(method: string, params: unknown): Promise<unknown> {
+            harness.rpcCalls.push({ method, params });
+            if (method === 'thread/name/set') {
+                return {};
+            }
+            if (method === 'thread/compact/start') {
+                return { turn: { id: 'turn-compact' } };
+            }
+            if (method === 'thread/turns/list') {
+                return {
+                    data: [{ id: 'turn-1' }],
+                    nextCursor: null,
+                    backwardsCursor: null
+                };
+            }
+            if (method === 'turn/interrupt') {
+                return {};
+            }
+            return {};
+        }
+
         async disconnect(): Promise<void> {}
     }
 
@@ -319,6 +340,32 @@ describe('codexRemoteLauncher', () => {
             reviewThreadId: 'thread-anonymous'
         });
 
+        await expect(handler({
+            method: 'thread/name/set',
+            params: { name: 'New name' }
+        })).resolves.toEqual({});
+
+        await expect(handler({
+            method: 'thread/compact/start',
+            params: {}
+        })).resolves.toEqual({
+            turn: { id: 'turn-compact' }
+        });
+
+        await expect(handler({
+            method: 'thread/turns/list',
+            params: { limit: 20 }
+        })).resolves.toEqual({
+            data: [{ id: 'turn-1' }],
+            nextCursor: null,
+            backwardsCursor: null
+        });
+
+        await expect(handler({
+            method: 'turn/interrupt',
+            params: {}
+        })).resolves.toEqual({});
+
         expect(harness.rpcCalls).toEqual([
             {
                 method: 'thread/read',
@@ -340,6 +387,33 @@ describe('codexRemoteLauncher', () => {
                 params: {
                     threadId: 'thread-anonymous',
                     target: { type: 'uncommittedChanges' }
+                }
+            },
+            {
+                method: 'thread/name/set',
+                params: {
+                    threadId: 'thread-anonymous',
+                    name: 'New name'
+                }
+            },
+            {
+                method: 'thread/compact/start',
+                params: {
+                    threadId: 'thread-anonymous'
+                }
+            },
+            {
+                method: 'thread/turns/list',
+                params: {
+                    threadId: 'thread-anonymous',
+                    limit: 20
+                }
+            },
+            {
+                method: 'turn/interrupt',
+                params: {
+                    threadId: 'thread-anonymous',
+                    turnId: 'turn-review'
                 }
             }
         ]);

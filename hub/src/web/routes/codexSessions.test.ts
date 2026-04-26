@@ -172,6 +172,8 @@ describe('codex sessions routes', () => {
                 codexSessionId: currentThreadId,
                 active: true,
                 archived: false,
+                codexOrigin: 'attached',
+                openStrategy: 'navigate-attached',
                 metadata: expect.objectContaining({
                     name: 'Remote current thread',
                     path: '/tmp/remote-project',
@@ -184,6 +186,8 @@ describe('codex sessions routes', () => {
                 attachedSessionId: null,
                 codexSessionId: '66666666-6666-6666-6666-666666666666',
                 archived: true,
+                codexOrigin: 'app-server-thread',
+                openStrategy: 'open-app-server-thread',
                 metadata: expect.objectContaining({
                     name: 'older archived thread',
                     path: '/tmp/remote-project',
@@ -239,6 +243,8 @@ describe('codex sessions routes', () => {
                     id: 'session-1',
                     attachedSessionId: 'session-1',
                     codexSessionId: '11111111-1111-1111-1111-111111111111',
+                    codexOrigin: 'attached',
+                    openStrategy: 'navigate-attached',
                     metadata: expect.objectContaining({
                         name: 'fix bug',
                         path: '/tmp/project',
@@ -249,6 +255,8 @@ describe('codex sessions routes', () => {
                     id: 'codex:22222222-2222-2222-2222-222222222222',
                     attachedSessionId: null,
                     codexSessionId: '22222222-2222-2222-2222-222222222222',
+                    codexOrigin: 'transcript-fallback',
+                    openStrategy: 'open-native-resume',
                     metadata: expect.objectContaining({
                         name: 'add tests',
                         path: '/tmp/project-b',
@@ -603,6 +611,8 @@ describe('codex sessions routes', () => {
                     id: 'codex:thread-orphan',
                     attachedSessionId: null,
                     codexSessionId: 'thread-orphan',
+                    codexOrigin: 'app-server-thread',
+                    openStrategy: 'open-app-server-thread',
                     metadata: expect.objectContaining({
                         name: 'orphan thread preview',
                         path: '/tmp/remote-project',
@@ -615,6 +625,7 @@ describe('codex sessions routes', () => {
 
     it('opens a codex session by transcript session id', async () => {
         const app = createApp({
+            getSessionsByNamespace: () => [],
             openCodexSession: async () => ({
                 id: 'session-2'
             } as Session)
@@ -631,5 +642,117 @@ describe('codex sessions routes', () => {
 
         expect(response.status).toBe(200)
         expect(await response.json()).toEqual({ sessionId: 'session-2' })
+    })
+
+    it('opens app-server thread history by spawning a remote codex resume session', async () => {
+        const spawnCalls: unknown[][] = []
+        const app = createApp({
+            getSessionsByNamespace: () => [
+                createSession({
+                    id: 'session-remote',
+                    model: 'gpt-5.4',
+                    modelReasoningEffort: 'high',
+                    effort: 'high',
+                    permissionMode: 'acceptEdits',
+                    metadata: {
+                        path: '/tmp/source-project',
+                        host: 'localhost',
+                        flavor: 'codex',
+                        source: 'managed',
+                        machineId: 'machine-1',
+                        codexSessionId: 'thread-source'
+                    }
+                })
+            ],
+            listCodexThreads: async () => ({
+                data: [
+                    {
+                        id: 'thread-target',
+                        cwd: '/tmp/target-project',
+                        name: 'Target app-server thread',
+                        updatedAt: 1_777_000_000_000
+                    }
+                ],
+                nextCursor: null,
+                backwardsCursor: null
+            }),
+            spawnSession: async (...args: unknown[]) => {
+                spawnCalls.push(args)
+                return { type: 'success', sessionId: 'session-spawned' }
+            }
+        })
+
+        const response = await app.request('/api/codex-sessions/open', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                cwd: '/tmp/ignored',
+                codexSessionId: 'thread-target',
+                title: 'Target app-server thread',
+                openStrategy: 'open-app-server-thread'
+            })
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ sessionId: 'session-spawned' })
+        expect(spawnCalls).toEqual([
+            [
+                'machine-1',
+                '/tmp/target-project',
+                'codex',
+                'gpt-5.4',
+                'high',
+                undefined,
+                undefined,
+                undefined,
+                'thread-target',
+                'high',
+                'acceptEdits'
+            ]
+        ])
+    })
+
+    it('does not silently fall back to native resume when requested app-server thread is unavailable', async () => {
+        let openedNative = false
+        const app = createApp({
+            getSessionsByNamespace: () => [
+                createSession({
+                    id: 'session-remote',
+                    metadata: {
+                        path: '/tmp/source-project',
+                        host: 'localhost',
+                        flavor: 'codex',
+                        source: 'managed',
+                        machineId: 'machine-1',
+                        codexSessionId: 'thread-source'
+                    }
+                })
+            ],
+            listCodexThreads: async () => ({
+                data: [],
+                nextCursor: null,
+                backwardsCursor: null
+            }),
+            openCodexSession: async () => {
+                openedNative = true
+                return createSession({ id: 'native-fallback' })
+            }
+        })
+
+        const response = await app.request('/api/codex-sessions/open', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                cwd: '/tmp/source-project',
+                codexSessionId: 'thread-missing',
+                openStrategy: 'open-app-server-thread'
+            })
+        })
+
+        expect(response.status).toBe(409)
+        expect(openedNative).toBe(false)
+        expect(await response.json()).toEqual({
+            error: 'Codex app-server thread is not available from an online remote session'
+        })
     })
 })

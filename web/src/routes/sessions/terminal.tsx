@@ -71,6 +71,18 @@ type ModifierState = {
     alt: boolean
 }
 
+type TerminalTab = {
+    id: string
+    label: string
+}
+
+function createTerminalId(): string {
+    if (typeof crypto?.randomUUID === 'function') {
+        return crypto.randomUUID()
+    }
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
 function applyModifierState(sequence: string, state: ModifierState): string {
     let modified = sequence
     if (state.alt) {
@@ -186,12 +198,10 @@ export default function TerminalPage() {
     const goBack = useAppGoBack()
     const { session } = useSession(api, sessionId)
     const terminalSupported = isRemoteTerminalSupported(session?.metadata)
-    const terminalId = useMemo(() => {
-        if (typeof crypto?.randomUUID === 'function') {
-            return crypto.randomUUID()
-        }
-        return `${Date.now()}-${Math.random().toString(16).slice(2)}`
-    }, [sessionId])
+    const initialTerminalId = useMemo(() => createTerminalId(), [sessionId])
+    const [tabs, setTabs] = useState<TerminalTab[]>(() => [{ id: initialTerminalId, label: '1' }])
+    const [activeTerminalId, setActiveTerminalId] = useState(initialTerminalId)
+    const terminalId = activeTerminalId
     const terminalRef = useRef<Terminal | null>(null)
     const inputDisposableRef = useRef<{ dispose: () => void } | null>(null)
     const connectOnceRef = useRef(false)
@@ -202,6 +212,11 @@ export default function TerminalPage() {
     const [altActive, setAltActive] = useState(false)
     const [pasteDialogOpen, setPasteDialogOpen] = useState(false)
     const [manualPasteText, setManualPasteText] = useState('')
+
+    useEffect(() => {
+        setTabs([{ id: initialTerminalId, label: '1' }])
+        setActiveTerminalId(initialTerminalId)
+    }, [initialTerminalId])
 
     const {
         state: terminalState,
@@ -296,8 +311,9 @@ export default function TerminalPage() {
     useEffect(() => {
         connectOnceRef.current = false
         setExitInfo(null)
+        terminalRef.current?.clear()
         disconnect()
-    }, [sessionId, disconnect])
+    }, [sessionId, terminalId, disconnect])
 
     useEffect(() => {
         return () => {
@@ -392,6 +408,32 @@ export default function TerminalPage() {
         [quickInputDisabled]
     )
 
+    const handleNewTab = useCallback(() => {
+        const id = createTerminalId()
+        setTabs((prev) => {
+            const nextLabel = String(prev.length + 1)
+            return [...prev, { id, label: nextLabel }]
+        })
+        setActiveTerminalId(id)
+    }, [])
+
+    const handleCloseTab = useCallback((id: string) => {
+        setTabs((prev) => {
+            if (prev.length <= 1) {
+                return prev
+            }
+            const index = prev.findIndex((tab) => tab.id === id)
+            const next = prev.filter((tab) => tab.id !== id)
+            if (id === activeTerminalId) {
+                const fallback = next[Math.max(0, index - 1)] ?? next[0]
+                if (fallback) {
+                    setActiveTerminalId(fallback.id)
+                }
+            }
+            return next.map((tab, tabIndex) => ({ ...tab, label: String(tabIndex + 1) }))
+        })
+    }, [activeTerminalId])
+
     if (!session) {
         return (
             <div className="flex h-full items-center justify-center">
@@ -427,6 +469,52 @@ export default function TerminalPage() {
                 </div>
             </div>
 
+            <div className="bg-[var(--app-bg)]">
+                <div className="mx-auto flex w-full max-w-content items-center gap-2 overflow-x-auto border-b border-[var(--app-divider)] px-3 py-2">
+                    {tabs.map((tab) => (
+                        <div
+                            key={tab.id}
+                            className={`flex h-8 shrink-0 items-center overflow-hidden rounded-md text-xs font-semibold transition-colors ${
+                                tab.id === activeTerminalId
+                                    ? 'bg-[var(--app-button)] text-[var(--app-button-text)]'
+                                    : 'bg-[var(--app-subtle-bg)] text-[var(--app-hint)] hover:text-[var(--app-fg)]'
+                            }`}
+                        >
+                            <button
+                                type="button"
+                                onClick={() => setActiveTerminalId(tab.id)}
+                                className="h-full px-3"
+                                title={`${t('terminal.tab')} ${tab.label}`}
+                            >
+                                {t('terminal.tab')} {tab.label}
+                            </button>
+                            {tabs.length > 1 ? (
+                                <button
+                                    type="button"
+                                    aria-label={t('terminal.tab.close')}
+                                    className="h-full px-2 text-xs opacity-80 hover:bg-black/10"
+                                    onClick={(event) => {
+                                        event.stopPropagation()
+                                        handleCloseTab(tab.id)
+                                    }}
+                                >
+                                    ×
+                                </button>
+                            ) : null}
+                        </div>
+                    ))}
+                    <button
+                        type="button"
+                        onClick={handleNewTab}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--app-subtle-bg)] text-lg leading-none text-[var(--app-hint)] transition-colors hover:text-[var(--app-fg)]"
+                        aria-label={t('terminal.tab.new')}
+                        title={t('terminal.tab.new')}
+                    >
+                        +
+                    </button>
+                </div>
+            </div>
+
             {session.active ? null : (
                 <div className="px-3 pt-3">
                     <div className="mx-auto w-full max-w-content rounded-md bg-[var(--app-subtle-bg)] p-3 text-sm text-[var(--app-hint)]">
@@ -455,7 +543,7 @@ export default function TerminalPage() {
             <div className="flex-1 min-h-0 overflow-hidden bg-[var(--app-bg)]">
                 <div className="mx-auto h-full w-full max-w-content p-3">
                     {terminalSupported ? (
-                        <TerminalView onMount={handleTerminalMount} onResize={handleResize} className="h-full w-full" />
+                        <TerminalView key={activeTerminalId} onMount={handleTerminalMount} onResize={handleResize} className="h-full w-full" />
                     ) : (
                         <div className="flex h-full items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] p-4 text-sm text-[var(--app-hint)]">
                             {t('terminal.unsupportedWindows')}

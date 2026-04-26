@@ -7,6 +7,7 @@ import { usePlatform } from '@/hooks/usePlatform'
 import { useSessionActions } from '@/hooks/mutations/useSessionActions'
 import { SessionActionMenu } from '@/components/SessionActionMenu'
 import { RenameSessionDialog } from '@/components/RenameSessionDialog'
+import { RollbackThreadDialog } from '@/components/RollbackThreadDialog'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { CopyIcon, CheckIcon } from '@/components/icons'
 import { getProjectPath, getSessionProjectPath } from '@/lib/project-path'
@@ -439,12 +440,23 @@ function SessionItem(props: {
     const [renameOpen, setRenameOpen] = useState(false)
     const [archiveOpen, setArchiveOpen] = useState(false)
     const [unarchiveOpen, setUnarchiveOpen] = useState(false)
+    const [rollbackOpen, setRollbackOpen] = useState(false)
+    const [compactOpen, setCompactOpen] = useState(false)
     const [deleteOpen, setDeleteOpen] = useState(false)
     const actionSessionId = getActionSessionId(s)
     const hasSessionActions = Boolean(actionSessionId)
     const codexThreadLifecycleSupported = supportsCodexThreadLifecycleActions(s)
 
-    const { archiveSession, unarchiveSession, forkSession, renameSession, deleteSession, isPending } = useSessionActions(
+    const {
+        archiveSession,
+        unarchiveSession,
+        forkSession,
+        rollbackCodexThread,
+        compactCodexThread,
+        renameSession,
+        deleteSession,
+        isPending
+    } = useSessionActions(
         api,
         actionSessionId,
         s.metadata?.flavor ?? null,
@@ -453,7 +465,8 @@ function SessionItem(props: {
             ? {
                 codexThreadId: s.codexSessionId,
                 sessionSource: s.metadata?.source ?? null,
-                sessionActive: s.active
+                sessionActive: s.active,
+                sessionPath: s.metadata?.path ?? null
             }
             : undefined
     )
@@ -559,6 +572,8 @@ function SessionItem(props: {
                 onClose={() => setMenuOpen(false)}
                 sessionActive={s.active}
                 onFork={hasSessionActions && s.metadata?.path ? handleFork : undefined}
+                onRollback={codexThreadLifecycleSupported && !s.archived ? () => setRollbackOpen(true) : undefined}
+                onCompact={codexThreadLifecycleSupported && !s.archived ? () => setCompactOpen(true) : undefined}
                 onRename={() => setRenameOpen(true)}
                 onArchive={hasSessionActions && !s.archived ? () => setArchiveOpen(true) : undefined}
                 onUnarchive={codexThreadLifecycleSupported && s.archived ? () => setUnarchiveOpen(true) : undefined}
@@ -571,6 +586,27 @@ function SessionItem(props: {
                 onClose={() => setRenameOpen(false)}
                 currentName={sessionName}
                 onRename={renameSession}
+                isPending={isPending}
+            />
+
+            <RollbackThreadDialog
+                isOpen={rollbackOpen}
+                onClose={() => setRollbackOpen(false)}
+                api={api}
+                sessionId={actionSessionId}
+                threadId={codexThreadLifecycleSupported ? s.codexSessionId : null}
+                onRollback={rollbackCodexThread}
+                isPending={isPending}
+            />
+
+            <ConfirmDialog
+                isOpen={compactOpen}
+                onClose={() => setCompactOpen(false)}
+                title={t('dialog.compactCodexThread.title')}
+                description={t('dialog.compactCodexThread.description', { name: sessionName })}
+                confirmLabel={t('dialog.compactCodexThread.confirm')}
+                confirmingLabel={t('dialog.compactCodexThread.confirming')}
+                onConfirm={compactCodexThread}
                 isPending={isPending}
             />
 

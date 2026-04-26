@@ -5,6 +5,7 @@ import { isTelegramApp } from '@/hooks/useTelegram'
 import { useSessionActions } from '@/hooks/mutations/useSessionActions'
 import { SessionActionMenu } from '@/components/SessionActionMenu'
 import { RenameSessionDialog } from '@/components/RenameSessionDialog'
+import { RollbackThreadDialog } from '@/components/RollbackThreadDialog'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { getSessionModelLabel } from '@/lib/sessionModelLabel'
 import { useTranslation } from '@/lib/use-translation'
@@ -79,6 +80,10 @@ export function SessionHeader(props: {
     const modelLabel = getSessionModelLabel(session)
     const isNativeSession = session.metadata?.source === 'native-attached'
     const isArchivedSession = Boolean(session.metadata?.archivedAt ?? session.metadata?.archivedBy ?? session.metadata?.archiveReason)
+    const codexThreadId = session.metadata?.codexSessionId?.trim() || null
+    const codexThreadLifecycleSupported = session.metadata?.flavor === 'codex'
+        && !isNativeSession
+        && Boolean(codexThreadId)
 
     const [menuOpen, setMenuOpen] = useState(false)
     const [menuAnchorPoint, setMenuAnchorPoint] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
@@ -86,12 +91,33 @@ export function SessionHeader(props: {
     const menuAnchorRef = useRef<HTMLButtonElement | null>(null)
     const [renameOpen, setRenameOpen] = useState(false)
     const [archiveOpen, setArchiveOpen] = useState(false)
+    const [unarchiveOpen, setUnarchiveOpen] = useState(false)
+    const [rollbackOpen, setRollbackOpen] = useState(false)
+    const [compactOpen, setCompactOpen] = useState(false)
     const [deleteOpen, setDeleteOpen] = useState(false)
 
-    const { archiveSession, forkSession, renameSession, deleteSession, isPending } = useSessionActions(
+    const {
+        archiveSession,
+        unarchiveSession,
+        forkSession,
+        rollbackCodexThread,
+        compactCodexThread,
+        renameSession,
+        deleteSession,
+        isPending
+    } = useSessionActions(
         api,
         session.id,
-        session.metadata?.flavor ?? null
+        session.metadata?.flavor ?? null,
+        undefined,
+        codexThreadLifecycleSupported
+            ? {
+                codexThreadId,
+                sessionSource: session.metadata?.source ?? null,
+                sessionActive: session.active,
+                sessionPath: session.metadata?.path ?? null
+            }
+            : undefined
     )
 
     const handleFork = async () => {
@@ -217,9 +243,11 @@ export function SessionHeader(props: {
                 onClose={() => setMenuOpen(false)}
                 sessionActive={session.active}
                 onFork={session.metadata?.path ? handleFork : undefined}
+                onRollback={codexThreadLifecycleSupported && !isArchivedSession ? () => setRollbackOpen(true) : undefined}
+                onCompact={codexThreadLifecycleSupported && !isArchivedSession ? () => setCompactOpen(true) : undefined}
                 onRename={() => setRenameOpen(true)}
                 onArchive={isArchivedSession ? undefined : () => setArchiveOpen(true)}
-                onUnarchive={undefined}
+                onUnarchive={codexThreadLifecycleSupported && isArchivedSession ? () => setUnarchiveOpen(true) : undefined}
                 onDelete={() => setDeleteOpen(true)}
                 anchorPoint={menuAnchorPoint}
                 menuId={menuId}
@@ -233,16 +261,51 @@ export function SessionHeader(props: {
                 isPending={isPending}
             />
 
+            <RollbackThreadDialog
+                isOpen={rollbackOpen}
+                onClose={() => setRollbackOpen(false)}
+                api={api}
+                sessionId={session.id}
+                threadId={codexThreadId}
+                onRollback={rollbackCodexThread}
+                isPending={isPending}
+            />
+
+            <ConfirmDialog
+                isOpen={compactOpen}
+                onClose={() => setCompactOpen(false)}
+                title={t('dialog.compactCodexThread.title')}
+                description={t('dialog.compactCodexThread.description', { name: title })}
+                confirmLabel={t('dialog.compactCodexThread.confirm')}
+                confirmingLabel={t('dialog.compactCodexThread.confirming')}
+                onConfirm={compactCodexThread}
+                isPending={isPending}
+            />
+
             <ConfirmDialog
                 isOpen={archiveOpen}
                 onClose={() => setArchiveOpen(false)}
-                title={t('dialog.archive.title')}
-                description={t('dialog.archive.description', { name: title })}
-                confirmLabel={t('dialog.archive.confirm')}
-                confirmingLabel={t('dialog.archive.confirming')}
+                title={t(codexThreadLifecycleSupported ? 'dialog.archiveCodexThread.title' : 'dialog.archive.title')}
+                description={t(
+                    codexThreadLifecycleSupported ? 'dialog.archiveCodexThread.description' : 'dialog.archive.description',
+                    { name: title }
+                )}
+                confirmLabel={t(codexThreadLifecycleSupported ? 'dialog.archiveCodexThread.confirm' : 'dialog.archive.confirm')}
+                confirmingLabel={t(codexThreadLifecycleSupported ? 'dialog.archiveCodexThread.confirming' : 'dialog.archive.confirming')}
                 onConfirm={handleArchive}
                 isPending={isPending}
                 destructive
+            />
+
+            <ConfirmDialog
+                isOpen={unarchiveOpen}
+                onClose={() => setUnarchiveOpen(false)}
+                title={t('dialog.unarchive.title')}
+                description={t('dialog.unarchive.description', { name: title })}
+                confirmLabel={t('dialog.unarchive.confirm')}
+                confirmingLabel={t('dialog.unarchive.confirming')}
+                onConfirm={unarchiveSession}
+                isPending={isPending}
             />
 
             <ConfirmDialog

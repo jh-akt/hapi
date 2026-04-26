@@ -4,6 +4,7 @@ import { useParams, useSearch } from '@tanstack/react-router'
 import type { GitCommandResponse } from '@/types/api'
 import { FileIcon } from '@/components/FileIcon'
 import { CopyIcon, CheckIcon } from '@/components/icons'
+import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import { useAppContext } from '@/lib/app-context'
 import { useAppGoBack } from '@/hooks/useAppGoBack'
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard'
@@ -96,6 +97,11 @@ function resolveLanguage(path: string): string | undefined {
     return langAlias[ext] ?? ext
 }
 
+function isMarkdownPath(path: string): boolean {
+    const lower = path.toLowerCase()
+    return lower.endsWith('.md') || lower.endsWith('.markdown') || lower.endsWith('.mdx')
+}
+
 function getUtf8ByteLength(value: string): number {
     return new TextEncoder().encode(value).length
 }
@@ -167,6 +173,7 @@ export default function FilePage() {
 
     const language = useMemo(() => resolveLanguage(filePath), [filePath])
     const highlighted = useShikiHighlighter(decodedContent, language)
+    const markdownFile = isMarkdownPath(filePath) && !binaryFile
     const contentSizeBytes = useMemo(
         () => (decodedContent ? getUtf8ByteLength(decodedContent) : 0),
         [decodedContent]
@@ -176,17 +183,22 @@ export default function FilePage() {
         && decodedContent.length > 0
         && contentSizeBytes <= MAX_COPYABLE_FILE_BYTES
 
-    const [displayMode, setDisplayMode] = useState<'diff' | 'file'>('diff')
+    const [displayMode, setDisplayMode] = useState<'diff' | 'preview' | 'file'>('diff')
 
     useEffect(() => {
+        const fileMode = markdownFile ? 'preview' : 'file'
         if (diffSuccess && !diffContent) {
-            setDisplayMode('file')
+            setDisplayMode(fileMode)
             return
         }
         if (diffFailed) {
+            setDisplayMode(fileMode)
+            return
+        }
+        if (displayMode === 'preview' && !markdownFile) {
             setDisplayMode('file')
         }
-    }, [diffSuccess, diffFailed, diffContent])
+    }, [diffSuccess, diffFailed, diffContent, markdownFile, displayMode])
 
     const loading = diffQuery.isLoading || fileQuery.isLoading
     const fileError = fileContentResult && !fileContentResult.success
@@ -228,16 +240,27 @@ export default function FilePage() {
                 </div>
             </div>
 
-            {diffContent ? (
+            {diffContent || markdownFile ? (
                 <div className="bg-[var(--app-bg)]">
                     <div className="mx-auto w-full max-w-content px-3 py-2 flex items-center gap-2 border-b border-[var(--app-divider)]">
-                        <button
-                            type="button"
-                            onClick={() => setDisplayMode('diff')}
-                            className={`rounded px-3 py-1 text-xs font-semibold ${displayMode === 'diff' ? 'bg-[var(--app-button)] text-[var(--app-button-text)] opacity-80' : 'bg-[var(--app-subtle-bg)] text-[var(--app-hint)]'}`}
-                        >
-                            Diff
-                        </button>
+                        {diffContent ? (
+                            <button
+                                type="button"
+                                onClick={() => setDisplayMode('diff')}
+                                className={`rounded px-3 py-1 text-xs font-semibold ${displayMode === 'diff' ? 'bg-[var(--app-button)] text-[var(--app-button-text)] opacity-80' : 'bg-[var(--app-subtle-bg)] text-[var(--app-hint)]'}`}
+                            >
+                                Diff
+                            </button>
+                        ) : null}
+                        {markdownFile ? (
+                            <button
+                                type="button"
+                                onClick={() => setDisplayMode('preview')}
+                                className={`rounded px-3 py-1 text-xs font-semibold ${displayMode === 'preview' ? 'bg-[var(--app-button)] text-[var(--app-button-text)] opacity-80' : 'bg-[var(--app-subtle-bg)] text-[var(--app-hint)]'}`}
+                            >
+                                Preview
+                            </button>
+                        ) : null}
                         <button
                             type="button"
                             onClick={() => setDisplayMode('file')}
@@ -270,6 +293,14 @@ export default function FilePage() {
                         <DiffDisplay diffContent={diffContent} />
                     ) : displayMode === 'diff' && diffError ? (
                         <div className="text-sm text-[var(--app-hint)]">{diffError}</div>
+                    ) : displayMode === 'preview' && markdownFile ? (
+                        decodedContent ? (
+                            <div className="rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-4 py-3">
+                                <MarkdownRenderer content={decodedContent} />
+                            </div>
+                        ) : (
+                            <div className="text-sm text-[var(--app-hint)]">File is empty.</div>
+                        )
                     ) : displayMode === 'file' ? (
                         decodedContent ? (
                             <div className="relative">

@@ -16,6 +16,7 @@ export type SessionSelectionAction =
         cwd: string
         codexSessionId: string
         title?: string
+        openStrategy?: CodexSessionSummary['openStrategy']
     }
 
 function isCodexHistoryPlaceholderSession(session: DisplaySessionSummary): session is CodexSessionSummary {
@@ -37,7 +38,8 @@ export function resolveSessionSelectionAction(session: DisplaySessionSummary): S
             type: 'open-codex-history',
             cwd: session.metadata?.path ?? '',
             codexSessionId: session.codexSessionId,
-            title: session.metadata?.name ?? undefined
+            title: session.metadata?.name ?? undefined,
+            openStrategy: session.openStrategy
         }
     }
 

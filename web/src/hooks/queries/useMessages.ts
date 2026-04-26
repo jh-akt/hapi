@@ -27,7 +27,7 @@ const EMPTY_STATE: MessageWindowState = {
     messagesVersion: 0,
 }
 
-export function useMessages(api: ApiClient | null, sessionId: string | null): {
+export function useMessages(api: ApiClient | null, sessionId: string | null, options?: { enabled?: boolean }): {
     messages: DecryptedMessage[]
     warning: string | null
     isLoading: boolean
@@ -57,11 +57,11 @@ export function useMessages(api: ApiClient | null, sessionId: string | null): {
     )
 
     useEffect(() => {
-        if (!api || !sessionId) {
+        if (!api || !sessionId || options?.enabled === false) {
             return
         }
         void fetchLatestMessages(api, sessionId)
-    }, [api, sessionId])
+    }, [api, options?.enabled, sessionId])
 
     useEffect(() => {
         if (!sessionId) {
@@ -74,14 +74,16 @@ export function useMessages(api: ApiClient | null, sessionId: string | null): {
 
     const loadMore = useCallback(async () => {
         if (!api || !sessionId) return
+        if (options?.enabled === false) return
         if (!state.hasMore || state.isLoadingMore) return
         await fetchOlderMessages(api, sessionId)
-    }, [api, sessionId, state.hasMore, state.isLoadingMore])
+    }, [api, options?.enabled, sessionId, state.hasMore, state.isLoadingMore])
 
     const refetch = useCallback(async () => {
         if (!api || !sessionId) return
+        if (options?.enabled === false) return
         await fetchLatestMessages(api, sessionId)
-    }, [api, sessionId])
+    }, [api, options?.enabled, sessionId])
 
     const flushPending = useCallback(async () => {
         if (!sessionId) return

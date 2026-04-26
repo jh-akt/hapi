@@ -5,6 +5,8 @@
 状态说明：
 
 - **API 已通**：shared protocol、CLI gateway、Hub proxy、Web client 至少一层已具备调用能力。
+- **UI 已接入**：前端已有主入口、toast 或刷新链路。
+- **基础已接入**：可用但还缺结构化展示、深层交互或更细状态。
 - **UI 未完成**：缺前端入口、状态展示、toast、刷新链路或最终交互。
 - **底层未完成**：server request、数据同步或运行时处理还没真正闭环。
 
@@ -12,44 +14,44 @@
 
 | 中文功能名 | Codex API / 能力 | 当前状态 | 下一步 |
 | --- | --- | --- | --- |
-| 原生历史读取 | `thread/read` | API 已通；聊天页仍主要渲染 HAPI message store，transcript sync 负责补历史 | 聊天主路径改为优先读 app-server thread，transcript scanning 降为 fallback |
-| 原生线程恢复 | `thread/resume` | API 已通；inactive session 可 resume | 确认 history placeholder、attached session、archived thread 的打开路径都走同一套刷新逻辑 |
-| 原生线程派生 | `thread/fork` | API 已通；部分 UI 仍走 HAPI session fork | Web action 改成 Codex thread fork，并刷新 sessions/codexSessions/nativeSessions/当前 thread |
-| 原生线程归档 | `thread/archive` | API 已通；列表归档已有入口 | 补齐失败 toast、archived list 细节和状态一致性检查 |
-| 原生线程恢复归档 | `thread/unarchive` | API 已通；列表恢复归档已有入口 | 与归档共用刷新链路，避免恢复后仍显示灰态 |
-| 原生线程回滚 | `thread/rollback` | API 和 client 已通；UI 基本缺失 | 增加回滚入口、确认弹窗、turn 数选择和结果刷新 |
-| 原生线程重命名 | `thread/name/set` | API 已通；现有 rename 多数仍是 HAPI session rename | Codex session 改用 app-server rename，并同步 HAPI metadata display name |
+| 原生历史读取 | `thread/read` | UI 已接入；remote Codex 聊天页优先读 app-server thread，messages/transcript 只做 fallback | 继续补更细的 item 渲染和空态提示 |
+| 原生线程恢复 | `thread/resume` | UI 已接入；inactive session 和 history placeholder 可按策略打开 | 继续覆盖 archived/thread 失效时的错误文案 |
+| 原生线程派生 | `thread/fork` | UI 已接入；Codex session action 走 app-server fork 并打开新 HAPI session | 补 fork 参数高级设置 |
+| 原生线程归档 | `thread/archive` | UI 已接入；action 成功后刷新 session/codex/native/thread queries | 补 archived list 边界状态 |
+| 原生线程恢复归档 | `thread/unarchive` | UI 已接入；恢复后刷新列表和当前 thread | 补恢复后跳转策略 |
+| 原生线程回滚 | `thread/rollback` | UI 已接入；确认弹窗从 `thread/turns/list` 选择 turn 数 | 补更细的 turn preview |
+| 原生线程重命名 | `thread/name/set` | UI 已接入；成功后同步 HAPI metadata name 并刷新查询 | 补 metadata/tag 类扩展 |
 | 原生线程元数据 | `thread/metadata/update` | API 已通；UI 缺失 | 用于标签、置顶、分组或未来 thread metadata 编辑 |
-| 原生线程压缩 | `thread/compact/start` | API 已通；UI 缺失 | 增加 compact action、运行中状态、完成/失败提示 |
-| 原生 turn 列表 | `thread/turns/list` | API 已通；UI 缺失 | 支撑 timeline、rollback 选择和 summary pane |
-| 主动追加指令 | `turn/steer` | API 已通；现有输入链路可调用 | 对 active turn 给明确“追加指令”状态和失败反馈 |
-| 中断当前 turn | `turn/interrupt` | API 已通；Codex 专用 UI 缺失 | 停止按钮对 Codex active turn 优先调用 app-server interrupt |
-| 原生 Review 启动 | `review/start` | `/review` 能启动；结果展示不完整 | 增加 review output、PR comments、review thread 关联展示 |
+| 原生线程压缩 | `thread/compact/start` | UI 已接入；action menu 可启动 compact 并显示 toast | 补 compact 完成事件和结果展示 |
+| 原生 turn 列表 | `thread/turns/list` | UI 已接入；支撑 rollback 和 thread summary pane | 补 timeline 视图 |
+| 主动追加指令 | `turn/steer` | API 已通；输入链路可调用 | 对 active turn 增加更明确的“追加指令”状态 |
+| 中断当前 turn | `turn/interrupt` | API 已通；停止按钮仍复用 HAPI abort，由 CLI 优先桥到 Codex interrupt | 增加 Codex 专用 interrupt 失败文案 |
+| 原生 Review 启动 | `review/start` | 基础已接入；`/review` 会保存 review thread id，Review 面板读取输出 | 结构化 findings / PR comments 仍需解析和文件跳转 |
 
 ## P1：工作区体验
 
 | 中文功能名 | 依赖能力 | 当前状态 | 下一步 |
 | --- | --- | --- | --- |
-| 多终端标签 | HAPI terminal / native session | 未完成 | 同一 session 下展示多个 terminal tabs，保留手机端可读性 |
-| 线程摘要面板 | `thread/read`, `thread/turns/list` | 未完成 | 展示 thread preview、模型、effort、turn 数、最新状态 |
-| Review 结果面板 | `review/start`, thread events | 未完成 | 展示 review findings、PR comments、关联文件和跳转 |
-| 富文件预览 | HAPI files / Codex outputs | 未完成 | 补齐 markdown、image、diff、二进制占位等更好的预览 |
+| 多终端标签 | HAPI terminal / native session | 基础已接入；同一 session 可创建多个 terminal id tab | 补 inactive tab 输出缓存/回放和 tab 命名 |
+| 线程摘要面板 | `thread/read`, `thread/turns/list` | UI 已接入；展示名称、状态、模型、effort、turn 数、cwd、CLI、Git | 补 token usage 和 timeline |
+| Review 结果面板 | `review/start`, thread events | 基础已接入；展示 review thread 输出、文件变更、命令和 MCP/tool 行 | 结构化 PR comments、findings、文件跳转仍需补 |
+| 富文件预览 | HAPI files / Codex outputs | 基础已接入；已有 diff/file，Markdown 增加 Preview | 图片、二进制 metadata、超大文件分页仍需补 |
 
 ## P2：Codex 管理面板
 
 | 中文功能名 | Codex API / 能力 | 当前状态 | 下一步 |
 | --- | --- | --- | --- |
-| 技能列表 | `skills/list` | API 已通；UI 缺失 | 增加 Skills panel，展示技能来源和说明 |
-| 插件列表 | `plugin/list` | API 已通；UI 缺失 | 增加 Plugins panel，展示已安装/可用插件 |
+| 技能列表 | `skills/list` | UI 已接入；管理面板展示技能、说明和 enabled 状态 | 补技能详情和按 cwd 过滤 |
+| 插件列表 | `plugin/list` | UI 已接入；管理面板展示插件、marketplace 和状态 | 补搜索、分类和详情弹窗 |
 | 插件详情 | `plugin/read` | API 已通；UI 缺失 | 展示 plugin metadata、说明、权限和入口 |
-| 插件安装 | `plugin/install` | API 已通；UI 缺失 | 增加安装动作、进度、错误提示 |
-| 插件卸载 | `plugin/uninstall` | API 已通；UI 缺失 | 增加卸载确认和刷新 |
-| App 列表 | `app/list` | API 已通；UI 缺失 | 增加 Apps panel，展示 Codex app 能力入口 |
-| MCP 状态 | `mcpServerStatus/list` | API 已通；UI 缺失 | 展示每个 MCP server 的连接状态和错误 |
+| 插件安装 | `plugin/install` | 基础已接入；管理面板可安装并刷新 | 补 auth policy / appsNeedingAuth 后续 UI |
+| 插件卸载 | `plugin/uninstall` | 基础已接入；管理面板可卸载并刷新 | 补卸载确认和依赖提示 |
+| App 列表 | `app/list` | UI 已接入；展示 app 名称、说明、enabled/accessible | 补 app 详情和入口动作 |
+| MCP 状态 | `mcpServerStatus/list` | UI 已接入；展示 server、auth、tools/resources 数量 | 补 startup error、资源浏览和工具详情 |
 | MCP 资源读取 | `mcpServer/resource/read` | API 已通；UI 缺失 | 在 MCP panel 中查看 resource 内容 |
 | MCP 工具调用 | `mcpServer/tool/call` | API 已通；UI 缺失 | 提供受控调用入口，避免误触危险工具 |
-| 线程记忆模式 | `thread/memoryMode/set` | API 已通；UI 缺失 | 在 thread 设置中切换 memory mode |
-| 重置记忆 | `memory/reset` | API 已通；UI 缺失 | 增加危险操作确认和完成提示 |
+| 线程记忆模式 | `thread/memoryMode/set` | UI 已接入；管理面板可启用/关闭当前 thread memory | 补当前模式展示 |
+| 重置记忆 | `memory/reset` | UI 已接入；危险操作有浏览器确认和完成 toast | 补更明确的账号范围说明 |
 | 自动化列表 | HAPI automation / Codex app | 未完成 | 展示已有 automation，后续再接创建/编辑 |
 
 ## P2：Server Request 闭环
@@ -74,8 +76,8 @@
 
 ## 推荐实现顺序
 
-1. **先补原生历史读取**：`thread/read` 成为聊天主路径，transcript 只兜底。
-2. **补全线程动作**：fork、rollback、rename、compact、interrupt。
-3. **补 Review 展示**：review output、PR comments、关联 thread。
-4. **补管理面板**：Skills、Plugins、Apps、MCP、Memory。
+1. **补结构化 Review**：把 review thread 里的 findings / PR comments / 文件定位解析成可跳转列表。
+2. **补管理面板深层交互**：plugin detail、MCP resource read、MCP tool call、app detail。
+3. **补状态细节**：memory 当前模式、compact 完成事件、terminal tab 输出回放。
+4. **补 Server Request 闭环**：MCP elicitation、Codex permissions、dynamic tool call、auth refresh。
 5. **最后处理 P3**：Browser use、Computer use、SSH devbox。

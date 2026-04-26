@@ -14,6 +14,8 @@ type SessionActionMenuProps = {
     onClose: () => void
     sessionActive: boolean
     onFork?: () => void
+    onRollback?: () => void
+    onCompact?: () => void
     onRename: () => void
     onArchive?: () => void
     onUnarchive?: () => void
@@ -86,6 +88,52 @@ function ForkIcon(props: { className?: string }) {
     )
 }
 
+function RollbackIcon(props: { className?: string }) {
+    return (
+        <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={props.className}
+        >
+            <path d="M3 12a9 9 0 1 0 3-6.7" />
+            <path d="M3 3v6h6" />
+        </svg>
+    )
+}
+
+function CompactIcon(props: { className?: string }) {
+    return (
+        <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={props.className}
+        >
+            <path d="M8 3v4a1 1 0 0 1-1 1H3" />
+            <path d="M16 3v4a1 1 0 0 0 1 1h4" />
+            <path d="M8 21v-4a1 1 0 0 0-1-1H3" />
+            <path d="M16 21v-4a1 1 0 0 1 1-1h4" />
+            <path d="M3 3l6 6" />
+            <path d="M21 3l-6 6" />
+            <path d="M3 21l6-6" />
+            <path d="M21 21l-6-6" />
+        </svg>
+    )
+}
+
 function TrashIcon(props: { className?: string }) {
     return (
         <svg
@@ -122,6 +170,8 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
         onClose,
         sessionActive,
         onFork,
+        onRollback,
+        onCompact,
         onRename,
         onArchive,
         onUnarchive,
@@ -143,6 +193,16 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
     const handleFork = () => {
         onClose()
         onFork?.()
+    }
+
+    const handleRollback = () => {
+        onClose()
+        onRollback?.()
+    }
+
+    const handleCompact = () => {
+        onClose()
+        onCompact?.()
     }
 
     const handleArchive = () => {
@@ -285,6 +345,30 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
                     >
                         <ForkIcon className="text-[var(--app-hint)]" />
                         {t('session.action.fork')}
+                    </button>
+                ) : null}
+
+                {onRollback ? (
+                    <button
+                        type="button"
+                        role="menuitem"
+                        className={`${baseItemClassName} hover:bg-[var(--app-subtle-bg)]`}
+                        onClick={handleRollback}
+                    >
+                        <RollbackIcon className="text-[var(--app-hint)]" />
+                        {t('session.action.rollback')}
+                    </button>
+                ) : null}
+
+                {onCompact ? (
+                    <button
+                        type="button"
+                        role="menuitem"
+                        className={`${baseItemClassName} hover:bg-[var(--app-subtle-bg)]`}
+                        onClick={handleCompact}
+                    >
+                        <CompactIcon className="text-[var(--app-hint)]" />
+                        {t('session.action.compact')}
                     </button>
                 ) : null}
 

@@ -18,7 +18,9 @@ import type {
     CodexThreadReadResponse,
     CodexThreadRollbackParams,
     CodexThreadRollbackResponse,
+    CodexThreadTurnsListResponse,
     CodexThreadUnarchiveResponse,
+    CodexOpenStrategy,
     CodexTurnSteerParams,
     CodexTurnSteerResponse,
     DeleteUploadResponse,
@@ -366,72 +368,157 @@ export class ApiClient {
     }
 
     async readCodexThread(sessionId: string, params: CodexThreadReadParams): Promise<CodexThreadReadResponse> {
-        return await this.request<CodexThreadReadResponse>(
-            `/api/sessions/${encodeURIComponent(sessionId)}/codex/threads/read`,
-            {
-                method: 'POST',
-                body: JSON.stringify(params)
-            }
-        )
+        return await this.codexAppServer(
+            sessionId,
+            'thread/read',
+            params as CodexAppServerParams<'thread/read'>
+        ) as CodexThreadReadResponse
     }
 
     async forkCodexThread(sessionId: string, params: CodexThreadForkParams): Promise<CodexThreadForkResponse> {
-        return await this.request<CodexThreadForkResponse>(
-            `/api/sessions/${encodeURIComponent(sessionId)}/codex/threads/fork`,
-            {
-                method: 'POST',
-                body: JSON.stringify(params)
-            }
-        )
+        return await this.codexAppServer(
+            sessionId,
+            'thread/fork',
+            params as CodexAppServerParams<'thread/fork'>
+        ) as CodexThreadForkResponse
     }
 
     async archiveCodexThread(sessionId: string, params?: CodexThreadActionParams): Promise<CodexThreadArchiveResponse> {
-        return await this.request<CodexThreadArchiveResponse>(
-            `/api/sessions/${encodeURIComponent(sessionId)}/codex/threads/archive`,
-            {
-                method: 'POST',
-                body: JSON.stringify(params ?? {})
-            }
-        )
+        return await this.codexAppServer(
+            sessionId,
+            'thread/archive',
+            (params ?? {}) as CodexAppServerParams<'thread/archive'>
+        ) as CodexThreadArchiveResponse
     }
 
     async unarchiveCodexThread(sessionId: string, params?: CodexThreadActionParams): Promise<CodexThreadUnarchiveResponse> {
-        return await this.request<CodexThreadUnarchiveResponse>(
-            `/api/sessions/${encodeURIComponent(sessionId)}/codex/threads/unarchive`,
-            {
-                method: 'POST',
-                body: JSON.stringify(params ?? {})
-            }
-        )
+        return await this.codexAppServer(
+            sessionId,
+            'thread/unarchive',
+            (params ?? {}) as CodexAppServerParams<'thread/unarchive'>
+        ) as CodexThreadUnarchiveResponse
     }
 
     async rollbackCodexThread(sessionId: string, params: CodexThreadRollbackParams): Promise<CodexThreadRollbackResponse> {
-        return await this.request<CodexThreadRollbackResponse>(
-            `/api/sessions/${encodeURIComponent(sessionId)}/codex/threads/rollback`,
-            {
-                method: 'POST',
-                body: JSON.stringify(params)
-            }
-        )
+        return await this.codexAppServer(
+            sessionId,
+            'thread/rollback',
+            params as CodexAppServerParams<'thread/rollback'>
+        ) as CodexThreadRollbackResponse
+    }
+
+    async renameCodexThread(
+        sessionId: string,
+        params: CodexAppServerParams<'thread/name/set'>
+    ): Promise<CodexAppServerResult<'thread/name/set'>> {
+        return await this.codexAppServer(sessionId, 'thread/name/set', params)
+    }
+
+    async compactCodexThread(
+        sessionId: string,
+        params: CodexAppServerParams<'thread/compact/start'>
+    ): Promise<CodexAppServerResult<'thread/compact/start'>> {
+        return await this.codexAppServer(sessionId, 'thread/compact/start', params)
+    }
+
+    async listCodexThreadTurns(
+        sessionId: string,
+        params: CodexAppServerParams<'thread/turns/list'>
+    ): Promise<CodexThreadTurnsListResponse> {
+        return await this.codexAppServer(sessionId, 'thread/turns/list', params) as CodexThreadTurnsListResponse
     }
 
     async steerCodexTurn(sessionId: string, params: CodexTurnSteerParams): Promise<CodexTurnSteerResponse> {
-        return await this.request<CodexTurnSteerResponse>(
-            `/api/sessions/${encodeURIComponent(sessionId)}/codex/turn/steer`,
-            {
-                method: 'POST',
-                body: JSON.stringify(params)
-            }
-        )
+        return await this.codexAppServer(
+            sessionId,
+            'turn/steer',
+            params as CodexAppServerParams<'turn/steer'>
+        ) as CodexTurnSteerResponse
     }
 
     async startCodexReview(sessionId: string, params: CodexReviewStartParams): Promise<CodexReviewStartResponse> {
-        return await this.request<CodexReviewStartResponse>(
-            `/api/sessions/${encodeURIComponent(sessionId)}/codex/review`,
-            {
-                method: 'POST',
-                body: JSON.stringify(params)
-            }
+        return await this.codexAppServer(
+            sessionId,
+            'review/start',
+            params as CodexAppServerParams<'review/start'>
+        ) as CodexReviewStartResponse
+    }
+
+    async listCodexSkills(
+        sessionId: string,
+        params: CodexAppServerParams<'skills/list'>
+    ): Promise<CodexAppServerResult<'skills/list'>> {
+        return await this.codexAppServer(sessionId, 'skills/list', params)
+    }
+
+    async listCodexPlugins(
+        sessionId: string,
+        params: CodexAppServerParams<'plugin/list'>
+    ): Promise<CodexAppServerResult<'plugin/list'>> {
+        return await this.codexAppServer(sessionId, 'plugin/list', params)
+    }
+
+    async readCodexPlugin(
+        sessionId: string,
+        params: CodexAppServerParams<'plugin/read'>
+    ): Promise<CodexAppServerResult<'plugin/read'>> {
+        return await this.codexAppServer(sessionId, 'plugin/read', params)
+    }
+
+    async installCodexPlugin(
+        sessionId: string,
+        params: CodexAppServerParams<'plugin/install'>
+    ): Promise<CodexAppServerResult<'plugin/install'>> {
+        return await this.codexAppServer(sessionId, 'plugin/install', params)
+    }
+
+    async uninstallCodexPlugin(
+        sessionId: string,
+        params: CodexAppServerParams<'plugin/uninstall'>
+    ): Promise<CodexAppServerResult<'plugin/uninstall'>> {
+        return await this.codexAppServer(sessionId, 'plugin/uninstall', params)
+    }
+
+    async listCodexApps(
+        sessionId: string,
+        params: CodexAppServerParams<'app/list'>
+    ): Promise<CodexAppServerResult<'app/list'>> {
+        return await this.codexAppServer(sessionId, 'app/list', params)
+    }
+
+    async listCodexMcpServers(
+        sessionId: string,
+        params: CodexAppServerParams<'mcpServerStatus/list'>
+    ): Promise<CodexAppServerResult<'mcpServerStatus/list'>> {
+        return await this.codexAppServer(sessionId, 'mcpServerStatus/list', params)
+    }
+
+    async readCodexMcpResource(
+        sessionId: string,
+        params: CodexAppServerParams<'mcpServer/resource/read'>
+    ): Promise<CodexAppServerResult<'mcpServer/resource/read'>> {
+        return await this.codexAppServer(sessionId, 'mcpServer/resource/read', params)
+    }
+
+    async callCodexMcpTool(
+        sessionId: string,
+        params: CodexAppServerParams<'mcpServer/tool/call'>
+    ): Promise<CodexAppServerResult<'mcpServer/tool/call'>> {
+        return await this.codexAppServer(sessionId, 'mcpServer/tool/call', params)
+    }
+
+    async setCodexThreadMemoryMode(
+        sessionId: string,
+        params: CodexAppServerParams<'thread/memoryMode/set'>
+    ): Promise<CodexAppServerResult<'thread/memoryMode/set'>> {
+        return await this.codexAppServer(sessionId, 'thread/memoryMode/set', params)
+    }
+
+    async resetCodexMemory(sessionId: string): Promise<CodexAppServerResult<'memory/reset'>> {
+        return await this.codexAppServer(
+            sessionId,
+            'memory/reset',
+            undefined as CodexAppServerParams<'memory/reset'>
         )
     }
 
@@ -449,6 +536,7 @@ export class ApiClient {
         cwd: string
         codexSessionId: string
         title?: string
+        openStrategy?: CodexOpenStrategy
     }): Promise<NativeSessionAttachResponse> {
         return await this.request<NativeSessionAttachResponse>('/api/codex-sessions/open', {
             method: 'POST',

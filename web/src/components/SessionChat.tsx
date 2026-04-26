@@ -22,6 +22,7 @@ import { createAttachmentAdapter } from '@/lib/attachmentAdapter'
 import { findUnsupportedCodexBuiltinSlashCommand, parseCodexReviewSlashCommand } from '@/lib/codexSlashCommands'
 import { useToast } from '@/lib/toast-context'
 import { useTranslation } from '@/lib/use-translation'
+import { CodexWorkspacePanel } from '@/components/CodexWorkspacePanel'
 import { SessionHeader } from '@/components/SessionHeader'
 import { TeamPanel } from '@/components/TeamPanel'
 import { usePlatform } from '@/hooks/usePlatform'
@@ -61,6 +62,7 @@ export function SessionChat(props: {
     const normalizedCacheRef = useRef<Map<string, { source: DecryptedMessage; normalized: NormalizedMessage | null }>>(new Map())
     const blocksByIdRef = useRef<Map<string, ChatBlock>>(new Map())
     const [forceScrollToken, setForceScrollToken] = useState(0)
+    const [reviewThreadId, setReviewThreadId] = useState<string | null>(null)
     const agentFlavor = props.session.metadata?.flavor ?? null
     const controlledByUser = props.session.agentState?.controlledByUser === true
     const codexCollaborationModeSupported = agentFlavor === 'codex' && !controlledByUser
@@ -79,6 +81,33 @@ export function SessionChat(props: {
         agentFlavor,
         codexCollaborationModeSupported
     )
+
+    const codexThreadId = typeof props.session.metadata?.codexSessionId === 'string'
+        ? props.session.metadata.codexSessionId.trim()
+        : ''
+    const reviewStorageKey = codexThreadId
+        ? `hapi:codex-review-thread:${props.session.id}:${codexThreadId}`
+        : null
+
+    useEffect(() => {
+        if (!reviewStorageKey) {
+            setReviewThreadId(null)
+            return
+        }
+        setReviewThreadId(localStorage.getItem(reviewStorageKey))
+    }, [reviewStorageKey])
+
+    const handleReviewThreadIdChange = useCallback((threadId: string | null) => {
+        setReviewThreadId(threadId)
+        if (!reviewStorageKey) {
+            return
+        }
+        if (threadId) {
+            localStorage.setItem(reviewStorageKey, threadId)
+        } else {
+            localStorage.removeItem(reviewStorageKey)
+        }
+    }, [reviewStorageKey])
 
     // Voice assistant integration
     const voice = useVoiceOptional()
@@ -327,15 +356,27 @@ export function SessionChat(props: {
                     return
                 }
 
-                void startCodexReview(reviewCommand).catch((error) => {
-                    haptic.notification('error')
-                    addToast({
-                        title: 'Review failed',
-                        body: error instanceof Error ? error.message : 'Failed to start review',
-                        sessionId: props.session.id,
-                        url: `/sessions/${props.session.id}`
+                void startCodexReview(reviewCommand)
+                    .then((response) => {
+                        haptic.notification('success')
+                        handleReviewThreadIdChange(response.reviewThreadId)
+                        props.onRefresh()
+                        addToast({
+                            title: t('codexPanel.review.started'),
+                            body: response.reviewThreadId,
+                            sessionId: props.session.id,
+                            url: `/sessions/${props.session.id}`
+                        })
                     })
-                })
+                    .catch((error) => {
+                        haptic.notification('error')
+                        addToast({
+                            title: t('codexPanel.review.failed'),
+                            body: error instanceof Error ? error.message : t('dialog.error.default'),
+                            sessionId: props.session.id,
+                            url: `/sessions/${props.session.id}`
+                        })
+                    })
                 setForceScrollToken((token) => token + 1)
                 return
             }
@@ -367,7 +408,9 @@ export function SessionChat(props: {
         addToast,
         controlledByUser,
         haptic,
+        handleReviewThreadIdChange,
         isNativeSession,
+        props.onRefresh,
         startCodexReview,
         t
     ])
@@ -411,6 +454,13 @@ export function SessionChat(props: {
                     </div>
                 </div>
             ) : null}
+
+            <CodexWorkspacePanel
+                api={props.api}
+                session={props.session}
+                reviewThreadId={reviewThreadId}
+                onReviewThreadIdChange={handleReviewThreadIdChange}
+            />
 
             <AssistantRuntimeProvider runtime={runtime}>
                 <div className="relative flex min-h-0 flex-1 flex-col">

@@ -16,6 +16,7 @@ type SessionActionOptions = {
     codexThreadId?: string | null
     sessionSource?: SessionSource | null
     sessionActive?: boolean
+    sessionPath?: string | null
 }
 
 export function useSessionActions(
@@ -23,12 +24,14 @@ export function useSessionActions(
     sessionId: string | null,
     agentFlavor?: string | null,
     codexCollaborationModeSupported?: boolean,
-    options?: SessionActionOptions
+    actionOptions?: SessionActionOptions
 ): {
     abortSession: () => Promise<void>
     archiveSession: () => Promise<void>
     unarchiveSession: () => Promise<void>
     forkSession: (options?: { directory?: string }) => Promise<string>
+    rollbackCodexThread: (numTurns: number) => Promise<void>
+    compactCodexThread: () => Promise<void>
     switchSession: () => Promise<void>
     startCodexReview: (params: CodexReviewStartParams) => Promise<CodexReviewStartResponse>
     setPermissionMode: (mode: PermissionMode) => Promise<void>
@@ -41,13 +44,15 @@ export function useSessionActions(
     isPending: boolean
 } {
     const queryClient = useQueryClient()
+    const codexThreadId = actionOptions?.codexThreadId?.trim() || null
     const codexThreadActionSupported = agentFlavor === 'codex'
-        && options?.sessionSource !== 'native-attached'
-        && typeof options?.codexThreadId === 'string'
-        && options.codexThreadId.trim().length > 0
+        && actionOptions?.sessionSource !== 'native-attached'
+        && typeof codexThreadId === 'string'
+        && codexThreadId.length > 0
 
     const invalidateSession = async (extraSessionIds: string[] = []) => {
         if (!sessionId) return
+        const sessionIds = [sessionId, ...extraSessionIds.filter((id) => id && id !== sessionId)]
         await queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) })
         for (const extraSessionId of extraSessionIds) {
             if (extraSessionId && extraSessionId !== sessionId) {
@@ -56,6 +61,13 @@ export function useSessionActions(
         }
         await queryClient.invalidateQueries({ queryKey: queryKeys.sessions })
         await queryClient.invalidateQueries({ queryKey: queryKeys.codexSessions })
+        await queryClient.invalidateQueries({ queryKey: queryKeys.nativeSessions })
+        if (codexThreadActionSupported && codexThreadId) {
+            for (const id of sessionIds) {
+                await queryClient.invalidateQueries({ queryKey: queryKeys.codexThread(id, codexThreadId) })
+                await queryClient.invalidateQueries({ queryKey: queryKeys.codexThreadTurns(id, codexThreadId) })
+            }
+        }
     }
 
     const resolveCodexThreadActionSessionId = async (): Promise<string> => {
@@ -65,7 +77,7 @@ export function useSessionActions(
         if (!codexThreadActionSupported) {
             throw new Error('Codex thread actions are unavailable for this session')
         }
-        if (options?.sessionActive) {
+        if (actionOptions?.sessionActive) {
             return sessionId
         }
         return await api.resumeSession(sessionId)
@@ -89,7 +101,7 @@ export function useSessionActions(
             if (codexThreadActionSupported) {
                 const resolvedSessionId = await resolveCodexThreadActionSessionId()
                 await api.archiveCodexThread(resolvedSessionId, {
-                    threadId: options?.codexThreadId ?? undefined
+                    threadId: actionOptions?.codexThreadId ?? undefined
                 })
                 return resolvedSessionId
             }
@@ -111,7 +123,7 @@ export function useSessionActions(
             }
             const resolvedSessionId = await resolveCodexThreadActionSessionId()
             await api.unarchiveCodexThread(resolvedSessionId, {
-                threadId: options?.codexThreadId ?? undefined
+                threadId: actionOptions?.codexThreadId ?? undefined
             })
             return resolvedSessionId
         },
@@ -121,16 +133,80 @@ export function useSessionActions(
     })
 
     const forkMutation = useMutation({
-        mutationFn: async (options?: { directory?: string }) => {
+        mutationFn: async (forkOptions?: { directory?: string }) => {
             if (!api || !sessionId) {
                 throw new Error('Session unavailable')
             }
-            return await api.forkSession(sessionId, options)
+            if (codexThreadActionSupported && codexThreadId) {
+                const resolvedSessionId = await resolveCodexThreadActionSessionId()
+                const forked = await api.forkCodexThread(resolvedSessionId, {
+                    threadId: codexThreadId,
+                    cwd: forkOptions?.directory
+                })
+                const nextThreadId = forked.thread.id
+                const cwd = forked.thread.cwd
+                    ?? forked.thread.path
+                    ?? forked.cwd
+                    ?? forkOptions?.directory
+                    ?? actionOptions?.sessionPath
+                    ?? ''
+                if (!nextThreadId || !cwd) {
+                    throw new Error('Forked Codex thread did not return an openable thread')
+                }
+                const opened = await api.openCodexSession({
+                    cwd,
+                    codexSessionId: nextThreadId,
+                    title: forked.thread.name ?? forked.thread.preview ?? undefined,
+                    openStrategy: 'open-app-server-thread'
+                })
+                return opened.sessionId
+            }
+            return await api.forkSession(sessionId, forkOptions)
         },
         onSuccess: async () => {
             await queryClient.invalidateQueries({ queryKey: queryKeys.sessions })
             await queryClient.invalidateQueries({ queryKey: queryKeys.codexSessions })
+            await queryClient.invalidateQueries({ queryKey: queryKeys.nativeSessions })
         },
+    })
+
+    const rollbackMutation = useMutation({
+        mutationFn: async (numTurns: number) => {
+            if (!api || !sessionId || !codexThreadId) {
+                throw new Error('Session unavailable')
+            }
+            if (!codexThreadActionSupported) {
+                throw new Error('Rollback is only supported for remote Codex threads')
+            }
+            const resolvedSessionId = await resolveCodexThreadActionSessionId()
+            await api.rollbackCodexThread(resolvedSessionId, {
+                threadId: codexThreadId,
+                numTurns
+            })
+            return resolvedSessionId
+        },
+        onSuccess: (resolvedSessionId) => void invalidateSession(
+            resolvedSessionId ? [resolvedSessionId] : []
+        ),
+    })
+
+    const compactMutation = useMutation({
+        mutationFn: async () => {
+            if (!api || !sessionId || !codexThreadId) {
+                throw new Error('Session unavailable')
+            }
+            if (!codexThreadActionSupported) {
+                throw new Error('Compact is only supported for remote Codex threads')
+            }
+            const resolvedSessionId = await resolveCodexThreadActionSessionId()
+            await api.compactCodexThread(resolvedSessionId, {
+                threadId: codexThreadId
+            })
+            return resolvedSessionId
+        },
+        onSuccess: (resolvedSessionId) => void invalidateSession(
+            resolvedSessionId ? [resolvedSessionId] : []
+        ),
     })
 
     const switchMutation = useMutation({
@@ -229,6 +305,15 @@ export function useSessionActions(
             if (!api || !sessionId) {
                 throw new Error('Session unavailable')
             }
+            if (codexThreadActionSupported && codexThreadId) {
+                const resolvedSessionId = await resolveCodexThreadActionSessionId()
+                await api.renameCodexThread(resolvedSessionId, {
+                    threadId: codexThreadId,
+                    name
+                })
+                await api.renameSession(resolvedSessionId, name)
+                return
+            }
             await api.renameSession(sessionId, name)
         },
         onSuccess: () => void invalidateSession(),
@@ -259,6 +344,12 @@ export function useSessionActions(
             await unarchiveMutation.mutateAsync()
         },
         forkSession: forkMutation.mutateAsync,
+        rollbackCodexThread: async (numTurns: number) => {
+            await rollbackMutation.mutateAsync(numTurns)
+        },
+        compactCodexThread: async () => {
+            await compactMutation.mutateAsync()
+        },
         switchSession: switchMutation.mutateAsync,
         startCodexReview: codexReviewMutation.mutateAsync,
         setPermissionMode: permissionMutation.mutateAsync,
@@ -272,6 +363,8 @@ export function useSessionActions(
             || archiveMutation.isPending
             || unarchiveMutation.isPending
             || forkMutation.isPending
+            || rollbackMutation.isPending
+            || compactMutation.isPending
             || switchMutation.isPending
             || codexReviewMutation.isPending
             || permissionMutation.isPending

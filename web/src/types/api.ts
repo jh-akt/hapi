@@ -93,10 +93,14 @@ export type AuthResponse = {
 }
 
 export type SessionsResponse = { sessions: SessionSummary[] }
+export type CodexOrigin = 'attached' | 'app-server-thread' | 'transcript-fallback'
+export type CodexOpenStrategy = 'navigate-attached' | 'open-app-server-thread' | 'open-native-resume'
 export type CodexSessionSummary = SessionSummary & {
     attachedSessionId: string | null
     listSource: 'codex-history'
     codexSessionId: string
+    codexOrigin: CodexOrigin
+    openStrategy: CodexOpenStrategy
 }
 export type CodexSessionsResponse = { sessions: CodexSessionSummary[] }
 export type SessionResponse = { session: Session }
@@ -241,6 +245,12 @@ export type CodexTurnSteerParams = {
 
 export type CodexTurnSteerResponse = {
     turnId: string
+}
+
+export type CodexThreadTurnsListResponse = {
+    data: CodexTurn[]
+    nextCursor: string | null
+    backwardsCursor: string | null
 }
 
 export type CodexReviewTarget =
