@@ -32,6 +32,7 @@ import { useSkills } from '@/hooks/queries/useSkills'
 import { useSendMessage } from '@/hooks/mutations/useSendMessage'
 import { getProjectPath, getSessionProjectPath, normalizeProjectPath } from '@/lib/project-path'
 import { queryKeys } from '@/lib/query-keys'
+import { resolveSessionSelectionAction, type DisplaySessionSummary } from '@/lib/sessionSelection'
 import { useToast } from '@/lib/toast-context'
 import { useTranslation } from '@/lib/use-translation'
 import { fetchLatestMessages, seedMessageWindowFromSession } from '@/lib/message-window-store'
@@ -115,6 +116,7 @@ function SessionsPage() {
     const search = useSearch({ from: '/sessions' })
     const matchRoute = useMatchRoute()
     const { t } = useTranslation()
+    const { addToast } = useToast()
     const [showArchived, setShowArchived] = useState(false)
     const { sessions, isLoading, error, refetch } = useCodexSessions(api)
     const { projects } = useProjects(api)
@@ -146,6 +148,67 @@ function SessionsPage() {
     const selectedSessionId = sessionMatch && sessionMatch.sessionId !== 'new' ? sessionMatch.sessionId : null
     const isSessionsIndex = pathname === '/sessions' || pathname === '/sessions/'
     const sidebar = useSidebarResize()
+
+    const handleSelectSession = useCallback((session: DisplaySessionSummary) => {
+        const action = resolveSessionSelectionAction(session)
+        if (action.type === 'navigate') {
+            navigate({
+                to: '/sessions/$sessionId',
+                params: { sessionId: action.sessionId },
+                search: {}
+            })
+            return
+        }
+
+        if (!api) {
+            return
+        }
+
+        void (async () => {
+            try {
+                let sessionId: string
+                let previousSessionId: string | null = null
+
+                if (action.type === 'open-codex-history') {
+                    const response = await api.openCodexSession({
+                        cwd: action.cwd,
+                        codexSessionId: action.codexSessionId,
+                        title: action.title
+                    })
+                    sessionId = response.sessionId
+                } else {
+                    previousSessionId = action.sessionId
+                    sessionId = await api.resumeSession(action.sessionId)
+                    if (sessionId !== action.sessionId) {
+                        seedMessageWindowFromSession(action.sessionId, sessionId)
+                    }
+                }
+
+                await Promise.all([
+                    queryClient.invalidateQueries({ queryKey: queryKeys.sessions }),
+                    queryClient.invalidateQueries({ queryKey: queryKeys.codexSessions }),
+                    queryClient.invalidateQueries({ queryKey: queryKeys.nativeSessions }),
+                    queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) }),
+                    ...(previousSessionId && previousSessionId !== sessionId
+                        ? [queryClient.invalidateQueries({ queryKey: queryKeys.session(previousSessionId) })]
+                        : [])
+                ])
+
+                navigate({
+                    to: '/sessions/$sessionId',
+                    params: { sessionId },
+                    search: {}
+                })
+            } catch (error) {
+                addToast({
+                    title: t('session.activateFailed.title'),
+                    body: error instanceof Error ? error.message : t('session.activateFailed.body'),
+                    sessionId: action.type === 'resume' ? action.sessionId : session.id,
+                    url: action.type === 'resume' ? `/sessions/${action.sessionId}` : ''
+                })
+            }
+        })()
+    }, [addToast, api, navigate, queryClient, t])
 
     return (
         <div className="flex h-full min-h-0">
@@ -199,37 +262,7 @@ function SessionsPage() {
                         sessions={visibleSessions}
                         projects={projects}
                         selectedSessionId={selectedSessionId}
-                        onSelect={(session) => {
-                            if (!('listSource' in session) || !session.id.startsWith('codex:')) {
-                                navigate({
-                                    to: '/sessions/$sessionId',
-                                    params: { sessionId: session.id },
-                                    search: {}
-                                })
-                                return
-                            }
-
-                            if (!api || !('codexSessionId' in session)) {
-                                return
-                            }
-
-                            void api.openCodexSession({
-                                cwd: session.metadata?.path ?? '',
-                                codexSessionId: session.codexSessionId,
-                                title: session.metadata?.name ?? undefined
-                            }).then(async ({ sessionId }) => {
-                                await Promise.all([
-                                    queryClient.invalidateQueries({ queryKey: queryKeys.codexSessions }),
-                                    queryClient.invalidateQueries({ queryKey: queryKeys.sessions }),
-                                    queryClient.invalidateQueries({ queryKey: queryKeys.nativeSessions })
-                                ])
-                                navigate({
-                                    to: '/sessions/$sessionId',
-                                    params: { sessionId },
-                                    search: {}
-                                })
-                            }).catch(() => {})
-                        }}
+                        onSelect={handleSelectSession}
                         onNewSession={() => navigate({ to: '/sessions/new' })}
                         onRefresh={handleRefresh}
                         isLoading={isLoading}

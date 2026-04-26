@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { Hono } from 'hono'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Session, SyncEngine } from '../../sync/syncEngine'
 import type { WebAppEnv } from '../middleware/auth'
@@ -164,23 +164,34 @@ describe('codex sessions routes', () => {
             { sessionId: 'session-1', archived: false },
             { sessionId: 'session-1', archived: true }
         ])
-        expect(await response.json()).toEqual({
-            sessions: [
-                expect.objectContaining({
-                    id: 'session-1',
-                    attachedSessionId: 'session-1',
-                    codexSessionId: currentThreadId,
-                    active: true,
-                    archived: false,
-                    metadata: expect.objectContaining({
-                        name: 'Remote current thread',
-                        path: '/tmp/remote-project',
-                        machineId: 'machine-1',
-                        summary: { text: 'live fix' }
-                    })
+        const body = await response.json() as { sessions: unknown[] }
+        expect(body.sessions).toEqual([
+            expect.objectContaining({
+                id: 'session-1',
+                attachedSessionId: 'session-1',
+                codexSessionId: currentThreadId,
+                active: true,
+                archived: false,
+                metadata: expect.objectContaining({
+                    name: 'Remote current thread',
+                    path: '/tmp/remote-project',
+                    machineId: 'machine-1',
+                    summary: { text: 'live fix' }
                 })
-            ]
-        })
+            }),
+            expect.objectContaining({
+                id: 'codex:66666666-6666-6666-6666-666666666666',
+                attachedSessionId: null,
+                codexSessionId: '66666666-6666-6666-6666-666666666666',
+                archived: true,
+                metadata: expect.objectContaining({
+                    name: 'older archived thread',
+                    path: '/tmp/remote-project',
+                    machineId: 'machine-1',
+                    summary: { text: 'older archived thread' }
+                })
+            })
+        ])
     })
 
     it('returns transcript-first codex sessions', async () => {
@@ -441,6 +452,61 @@ describe('codex sessions routes', () => {
         })
     })
 
+    it('normalizes transcript and attached session paths before returning them', async () => {
+        const codexHomeDir = makeTempCodexHome()
+        process.env.CODEX_HOME = codexHomeDir
+
+        const transcriptPath = join(homedir(), 'Code', 'desktop-project')
+        const attachedPath = join(homedir(), 'Code', 'managed-project')
+
+        writeTranscriptFile({
+            codexHomeDir,
+            fileName: 'rollout-2026-04-24T06-00-00-thread-6.jsonl',
+            sessionId: '66666666-1111-1111-1111-111111111111',
+            cwd: '～/Code/desktop-project/',
+            timestamp: '2026-04-24T06:00:00.000Z',
+            userMessages: ['resume desktop thread'],
+            source: 'vscode',
+            originator: 'Codex Desktop'
+        })
+
+        const app = createApp({
+            getSessionsByNamespace: () => [
+                createSession({
+                    id: 'session-managed-path',
+                    metadata: {
+                        path: '~/Code/managed-project/',
+                        host: 'localhost',
+                        name: 'Managed project',
+                        flavor: 'codex',
+                        source: 'managed',
+                        codexSessionId: 'managed-thread-path'
+                    }
+                })
+            ]
+        })
+
+        const response = await app.request('/api/codex-sessions')
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({
+            sessions: expect.arrayContaining([
+                expect.objectContaining({
+                    id: 'session-managed-path',
+                    metadata: expect.objectContaining({
+                        path: attachedPath
+                    })
+                }),
+                expect.objectContaining({
+                    id: 'codex:66666666-1111-1111-1111-111111111111',
+                    metadata: expect.objectContaining({
+                        path: transcriptPath
+                    })
+                })
+            ])
+        })
+    })
+
     it('includes attached managed codex sessions without transcript history', async () => {
         const codexHomeDir = makeTempCodexHome()
         process.env.CODEX_HOME = codexHomeDir
@@ -484,7 +550,7 @@ describe('codex sessions routes', () => {
         })
     })
 
-    it('filters unattached app-server threads that cannot be opened yet', async () => {
+    it('includes unattached app-server threads as openable history placeholders', async () => {
         const codexHomeDir = makeTempCodexHome()
         process.env.CODEX_HOME = codexHomeDir
 
@@ -531,6 +597,16 @@ describe('codex sessions routes', () => {
                         name: 'Remote rollout',
                         path: '/tmp/remote-project',
                         agentSessionId: 'thread-attached'
+                    })
+                }),
+                expect.objectContaining({
+                    id: 'codex:thread-orphan',
+                    attachedSessionId: null,
+                    codexSessionId: 'thread-orphan',
+                    metadata: expect.objectContaining({
+                        name: 'orphan thread preview',
+                        path: '/tmp/remote-project',
+                        agentSessionId: 'thread-orphan'
                     })
                 })
             ]

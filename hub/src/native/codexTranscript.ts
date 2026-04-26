@@ -351,7 +351,10 @@ function readTranscriptMetadata(filePath: string): CodexTranscriptMeta | null {
 }
 
 function isSupportedNativeCodexTranscript(meta: CodexTranscriptMeta): boolean {
-    return meta.source === 'cli' || meta.originator === 'codex-tui'
+    return meta.source === 'cli'
+        || meta.source === 'vscode'
+        || meta.originator === 'codex-tui'
+        || meta.originator === 'Codex Desktop'
 }
 
 function readTranscriptDelta(

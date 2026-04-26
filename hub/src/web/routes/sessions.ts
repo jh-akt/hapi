@@ -1,4 +1,6 @@
 import { getPermissionModesForFlavor, isPermissionModeAllowedForFlavor, toSessionSummary } from '@hapi/protocol'
+import type { CodexAppServerMethod, CodexAppServerParams } from '@hapi/protocol/codex-app-server'
+import { getCodexAppServerCapability, isCodexAppServerMethod } from '@hapi/protocol/codex-app-server'
 import { CodexCollaborationModeSchema, PermissionModeSchema } from '@hapi/protocol/schemas'
 import { Hono, type Context } from 'hono'
 import { z } from 'zod'
@@ -152,6 +154,11 @@ const codexReviewTargetSchema = z.discriminatedUnion('type', [
 const codexReviewSchema = codexThreadActionSchema.extend({
     target: codexReviewTargetSchema,
     delivery: z.enum(['inline', 'detached']).nullable().optional()
+})
+
+const codexAppServerProxySchema = z.object({
+    method: z.string().trim().min(1),
+    params: z.unknown().optional()
 })
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -405,6 +412,47 @@ export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null): Ho
             return c.json(result)
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to list Codex threads'
+            return c.json({ error: message }, 409)
+        }
+    })
+
+    app.post('/sessions/:id/codex/app-server', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireRemoteCodexSession(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const body = await c.req.json().catch(() => null)
+        const parsed = codexAppServerProxySchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body' }, 400)
+        }
+
+        const { method, params } = parsed.data
+        if (!isCodexAppServerMethod(method)) {
+            return c.json({ error: 'Unsupported Codex app-server method' }, 403)
+        }
+
+        const capability = getCodexAppServerCapability(method)
+        if (!capability?.webVisible) {
+            return c.json({ error: 'Codex app-server method is not available from the web API' }, 403)
+        }
+
+        try {
+            const result = await engine.codexAppServer(
+                sessionResult.sessionId,
+                method as CodexAppServerMethod,
+                params as CodexAppServerParams<CodexAppServerMethod>
+            )
+            return c.json(result)
+        } catch (error) {
+            const fallback = capability.failureCopy
+            const message = error instanceof Error ? error.message : fallback
             return c.json({ error: message }, 409)
         }
     })

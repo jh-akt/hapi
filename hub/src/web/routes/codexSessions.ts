@@ -4,6 +4,7 @@ import { basename } from 'node:path'
 import { z } from 'zod'
 import { listNativeCodexSessionCatalog } from '../../native/codexSessionCatalog'
 import type { Session, SyncEngine } from '../../sync/syncEngine'
+import { normalizeFilesystemPath } from '../../utils/filesystemPath'
 import type { WebAppEnv } from '../middleware/auth'
 import { requireSyncEngine } from './guards'
 
@@ -167,7 +168,8 @@ function buildCodexSessionCandidate(options: {
     sourceRank: number
 }): CodexSessionCandidate {
     const attachedSummary = options.attachedSession ? toSessionSummary(options.attachedSession) : null
-    const path = options.cwd.trim() || attachedSummary?.metadata?.path || options.cwd
+    const rawPath = options.cwd.trim() || attachedSummary?.metadata?.path || options.cwd
+    const path = normalizeFilesystemPath(rawPath) || rawPath
     const summaryText = attachedSummary?.metadata?.summary?.text
         ?? normalizeDisplayText(options.summaryText)
     const updatedAt = Math.max(attachedSummary?.updatedAt ?? 0, normalizeTimestamp(options.updatedAt))
@@ -307,9 +309,6 @@ async function listAppServerCodexSessionCandidates(
 
                     const threadAttachedSession = pickAttachedSession(sessions, codexSessionId)
                         ?? (attachedSession?.metadata?.codexSessionId === codexSessionId ? attachedSession : null)
-                    if (!threadAttachedSession) {
-                        continue
-                    }
 
                     mergeCodexSessionCandidate(entries, buildCodexSessionCandidate({
                         codexSessionId,

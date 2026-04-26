@@ -4,6 +4,8 @@
 
 当前这条分支主打 **原生 Codex session**：让 Codex 继续跑在你自己的终端 / `tmux` 里，再从手机打开同一个 session，PC 和手机之间来回切换，不重启 agent，也不丢上下文。
 
+> **支持范围**：当前公开支持仅限 **Codex**。Claude Code、Gemini 和其它 agent 相关代码不作为当前支持面；如果还在仓库里出现，视为历史实现或实验路径。
+
 > **为什么是 HAPI？** HAPI 是 Happy 的 local-first 替代方案。核心差异见 [Why Not Happy?](docs/guide/why-hapi.md)。
 
 ## 特性
@@ -27,7 +29,7 @@
 当前范围：
 
 - 原生创建 / 附着 / 恢复目前只面向 `codex`
-- 原生 `claude` attach 暂未支持
+- Claude Code、Gemini 和其它 agent 暂不支持
 
 ## 快速开始
 

@@ -8,12 +8,18 @@
     "exports": {
         ".": "./src/index.ts",
         "./messages": "./src/messages.ts",
+        "./codex-app-server": "./src/codex-app-server.ts",
         "./modes": "./src/modes.ts",
         "./schemas": "./src/schemas.ts",
         "./types": "./src/types.ts",
         "./voice": "./src/voice.ts"
     },
     "sideEffects": false,
+    "scripts": {
+        "generate:codex-app-server-types": "bun run scripts/generate-codex-app-server-types.ts",
+        "check:codex-app-server-types": "bun run scripts/check-codex-app-server-types.ts",
+        "typecheck": "tsc --noEmit"
+    },
     "dependencies": {
         "zod": "^4.2.1"
     }

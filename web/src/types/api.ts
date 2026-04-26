@@ -9,6 +9,12 @@ import type {
 } from '@hapi/protocol/types'
 
 export type {
+    CodexAppServerMethod,
+    CodexAppServerParams,
+    CodexAppServerResult
+} from '@hapi/protocol/codex-app-server'
+
+export type {
     AgentState,
     AttachmentMetadata,
     CodexCollaborationMode,

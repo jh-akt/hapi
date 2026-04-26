@@ -12,6 +12,8 @@ import { emitReadyIfIdle } from './utils/emitReadyIfIdle';
 import type { CodexSession } from './session';
 import type { EnhancedMode } from './loop';
 import type {
+    CodexAppServerMethod,
+    CodexAppServerParams,
     ReviewStartParams,
     ThreadArchiveParams,
     ThreadForkParams,
@@ -21,6 +23,7 @@ import type {
     ThreadUnarchiveParams,
     TurnSteerParams
 } from './appServerTypes';
+import { CODEX_APP_SERVER_METHODS, isCodexAppServerMethod } from '@hapi/protocol/codex-app-server';
 import { hasCodexCliOverrides } from './utils/codexCliOverrides';
 import { AppServerEventConverter } from './utils/appServerEventConverter';
 import { registerAppServerPermissionHandlers } from './utils/appServerPermissionAdapter';
@@ -34,27 +37,9 @@ import {
 
 type HappyServer = Awaited<ReturnType<typeof buildHapiMcpBridge>>['server'];
 type QueuedMessage = { message: string; mode: EnhancedMode; isolate: boolean; hash: string };
-type SessionAppServerRpcMethod =
-    | 'thread/list'
-    | 'thread/read'
-    | 'thread/fork'
-    | 'thread/archive'
-    | 'thread/unarchive'
-    | 'thread/rollback'
-    | 'turn/steer'
-    | 'review/start';
 
 const SESSION_APP_SERVER_RPC_METHOD = 'codex-app-server';
-const SESSION_APP_SERVER_RPC_METHODS = new Set<SessionAppServerRpcMethod>([
-    'thread/list',
-    'thread/read',
-    'thread/fork',
-    'thread/archive',
-    'thread/unarchive',
-    'thread/rollback',
-    'turn/steer',
-    'review/start'
-]);
+const SESSION_APP_SERVER_RPC_METHODS = new Set<CodexAppServerMethod>(CODEX_APP_SERVER_METHODS);
 
 class CodexRemoteLauncher extends RemoteLauncherBase {
     private readonly session: CodexSession;
@@ -625,6 +610,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
         await appServerClient.initialize({
             clientInfo: {
                 name: 'hapi-codex-client',
+                title: 'HAPI Codex Client',
                 version: '1.0.0'
             },
             capabilities: {
@@ -648,20 +634,55 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
             return turnId;
         };
 
+        const withDefaultThreadId = <TParams extends Record<string, unknown>>(params: TParams): TParams & { threadId: string } => ({
+            ...params,
+            threadId: resolveRpcThreadId(params.threadId)
+        });
+
+        const normalizeRpcUserInput = (input: unknown[]): TurnSteerParams['input'] => input.map((item) => {
+            const itemRecord = asRecord(item);
+            if (itemRecord?.type !== 'text') {
+                return item as TurnSteerParams['input'][number];
+            }
+
+            const rawTextElements = Array.isArray(itemRecord.text_elements)
+                ? itemRecord.text_elements
+                : Array.isArray(itemRecord.textElements)
+                    ? itemRecord.textElements
+                    : [];
+
+            return {
+                type: 'text',
+                text: asString(itemRecord.text) ?? '',
+                text_elements: rawTextElements as Extract<TurnSteerParams['input'][number], { type: 'text' }>['text_elements']
+            };
+        });
+
         session.client.rpcHandlerManager.registerHandler(SESSION_APP_SERVER_RPC_METHOD, async (payload: unknown) => {
             const request = asRecord(payload);
             const methodValue = asString(request?.method);
 
-            if (!methodValue || !SESSION_APP_SERVER_RPC_METHODS.has(methodValue as SessionAppServerRpcMethod)) {
+            if (!methodValue || !isCodexAppServerMethod(methodValue) || !SESSION_APP_SERVER_RPC_METHODS.has(methodValue)) {
                 throw new Error('Unsupported Codex app-server RPC method');
             }
 
-            const method = methodValue as SessionAppServerRpcMethod;
-            const params = asRecord(request?.params) ?? {};
+            const method = methodValue;
+            const rawParams = request?.params;
+            const params = asRecord(rawParams) ?? {};
 
             switch (method) {
                 case 'thread/list':
                     return await appServerClient.listThreads(params as ThreadListParams);
+
+                case 'initialize':
+                case 'thread/start':
+                case 'thread/resume':
+                case 'turn/start':
+                    return await appServerClient.request(
+                        method,
+                        rawParams as CodexAppServerParams<typeof method>,
+                        { timeoutMs: CodexAppServerClient.DEFAULT_TIMEOUT_MS }
+                    );
 
                 case 'thread/read': {
                     const readParams: ThreadReadParams = {
@@ -713,7 +734,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     }
                     const steerParams: TurnSteerParams = {
                         threadId: resolveRpcThreadId(params.threadId),
-                        input: input as TurnSteerParams['input'],
+                        input: normalizeRpcUserInput(input),
                         expectedTurnId: resolveRpcTurnId(params.expectedTurnId)
                     };
                     const response = await appServerClient.steerTurn(steerParams);
@@ -740,6 +761,46 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     }
                     return response;
                 }
+
+                case 'thread/name/set':
+                case 'thread/metadata/update':
+                case 'thread/memoryMode/set':
+                case 'thread/compact/start':
+                case 'thread/turns/list':
+                case 'mcpServer/resource/read':
+                case 'mcpServer/tool/call':
+                case 'app/list':
+                    return await appServerClient.request(
+                        method,
+                        withDefaultThreadId(params) as CodexAppServerParams<typeof method>,
+                        { timeoutMs: 30_000 }
+                    );
+
+                case 'turn/interrupt':
+                    return await appServerClient.request(
+                        method,
+                        {
+                            ...params,
+                            threadId: resolveRpcThreadId(params.threadId),
+                            turnId: resolveRpcTurnId(params.turnId)
+                        } as CodexAppServerParams<typeof method>,
+                        { timeoutMs: 30_000 }
+                    );
+
+                case 'skills/list':
+                case 'plugin/list':
+                case 'plugin/read':
+                case 'plugin/install':
+                case 'plugin/uninstall':
+                case 'mcpServerStatus/list':
+                    return await appServerClient.request(
+                        method,
+                        params as CodexAppServerParams<typeof method>,
+                        { timeoutMs: 30_000 }
+                    );
+
+                case 'memory/reset':
+                    return await appServerClient.request(method, undefined, { timeoutMs: 30_000 });
             }
         });
 

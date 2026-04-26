@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionSummary } from '@/types/api'
-import { deduplicateSessionsByAgentId } from './SessionList'
+import { deduplicateSessionsByAgentId, isSessionVisuallyDimmed } from './SessionList'
 
 function makeSession(overrides: Partial<SessionSummary> & { id: string }): SessionSummary {
     return {
@@ -79,5 +79,15 @@ describe('deduplicateSessionsByAgentId', () => {
         const result = deduplicateSessionsByAgentId(sessions)
         expect(result).toHaveLength(2)
         expect(result.map(s => s.id).sort()).toEqual(['b', 'd'])
+    })
+})
+
+describe('isSessionVisuallyDimmed', () => {
+    it('does not dim inactive unarchived sessions', () => {
+        expect(isSessionVisuallyDimmed(makeSession({ id: 'inactive', active: false, archived: false }))).toBe(false)
+    })
+
+    it('dims archived sessions', () => {
+        expect(isSessionVisuallyDimmed(makeSession({ id: 'archived', active: false, archived: true }))).toBe(true)
     })
 })

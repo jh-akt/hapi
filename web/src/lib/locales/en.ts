@@ -92,6 +92,8 @@ export default {
   'dialog.unarchive.confirming': 'Restoring…',
   'session.forkFailed.title': 'Failed to fork session',
   'session.forkFailed.body': 'Could not create a fork of this session.',
+  'session.activateFailed.title': 'Failed to activate session',
+  'session.activateFailed.body': 'Could not activate this session.',
   'session.createInDirectoryFailed.title': 'Failed to create session',
   'session.createInDirectoryFailed.body': 'Could not create a new session in this directory.',
   'dialog.delete.title': 'Delete Session',

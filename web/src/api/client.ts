@@ -1,4 +1,7 @@
 import type {
+    CodexAppServerMethod,
+    CodexAppServerParams,
+    CodexAppServerResult,
     AttachmentMetadata,
     AuthResponse,
     CodexCollaborationMode,
@@ -344,6 +347,20 @@ export class ApiClient {
             {
                 method: 'POST',
                 body: JSON.stringify(params ?? {})
+            }
+        )
+    }
+
+    async codexAppServer<TMethod extends CodexAppServerMethod>(
+        sessionId: string,
+        method: TMethod,
+        params: CodexAppServerParams<TMethod>
+    ): Promise<CodexAppServerResult<TMethod>> {
+        return await this.request<CodexAppServerResult<TMethod>>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/codex/app-server`,
+            {
+                method: 'POST',
+                body: JSON.stringify({ method, params })
             }
         )
     }

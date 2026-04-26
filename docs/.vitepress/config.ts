@@ -24,6 +24,8 @@ export default defineConfig({
       { text: 'VPS Relay Deployment', link: '/guide/vps-relay-deployment' },
       { text: 'PWA', link: '/guide/pwa' },
       { text: 'How it Works', link: '/guide/how-it-works' },
+      { text: 'Codex Native / App-Server', link: '/guide/codex-native-app-server' },
+      { text: 'Codex Feature Gap', link: '/guide/codex-app-server-feature-gap' },
       { text: 'Cursor Agent', link: '/guide/cursor' },
       { text: 'Voice Assistant', link: '/guide/voice-assistant' },
       { text: 'Why HAPI', link: '/guide/why-hapi' },

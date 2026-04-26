@@ -265,6 +265,7 @@ describe('codexRemoteLauncher', () => {
         expect(harness.initializeCalls).toEqual([{
             clientInfo: {
                 name: 'hapi-codex-client',
+                title: 'HAPI Codex Client',
                 version: '1.0.0'
             },
             capabilities: {
@@ -331,7 +332,7 @@ describe('codexRemoteLauncher', () => {
                 params: {
                     threadId: 'thread-anonymous',
                     expectedTurnId: 'turn-live',
-                    input: [{ type: 'text', text: 'follow up' }]
+                    input: [{ type: 'text', text: 'follow up', text_elements: [] }]
                 }
             },
             {
@@ -363,7 +364,7 @@ describe('codexRemoteLauncher', () => {
             params: {
                 threadId: 'thread-anonymous',
                 expectedTurnId: 'turn-live',
-                input: [{ type: 'text', text: 'follow up message' }]
+                input: [{ type: 'text', text: 'follow up message', text_elements: [] }]
             }
         });
     });

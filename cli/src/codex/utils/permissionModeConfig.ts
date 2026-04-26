@@ -7,6 +7,28 @@ export type CodexPermissionModeConfig = {
     sandboxPolicy: SandboxPolicy;
 };
 
+export function buildCodexSandboxPolicy(mode: SandboxMode): SandboxPolicy {
+    switch (mode) {
+        case 'read-only':
+            return {
+                type: 'readOnly',
+                access: { type: 'fullAccess' },
+                networkAccess: false
+            };
+        case 'workspace-write':
+            return {
+                type: 'workspaceWrite',
+                writableRoots: [],
+                readOnlyAccess: { type: 'fullAccess' },
+                networkAccess: false,
+                excludeTmpdirEnvVar: false,
+                excludeSlashTmp: false
+            };
+        case 'danger-full-access':
+            return { type: 'dangerFullAccess' };
+    }
+}
+
 export function resolveCodexPermissionModeConfig(mode: CodexPermissionMode): CodexPermissionModeConfig {
     switch (mode) {
         case 'default':
@@ -16,26 +38,26 @@ export function resolveCodexPermissionModeConfig(mode: CodexPermissionMode): Cod
                 // user-approvable elevation request when the model needs it.
                 approvalPolicy: 'on-request',
                 sandbox: 'workspace-write',
-                sandboxPolicy: { type: 'workspaceWrite' }
+                sandboxPolicy: buildCodexSandboxPolicy('workspace-write')
             };
         case 'read-only':
             return {
                 approvalPolicy: 'never',
                 sandbox: 'read-only',
-                sandboxPolicy: { type: 'readOnly' }
+                sandboxPolicy: buildCodexSandboxPolicy('read-only')
             };
         case 'safe-yolo':
             return {
                 // Keep escalation available when the workspace-write sandbox blocks a command.
                 approvalPolicy: 'on-failure',
                 sandbox: 'workspace-write',
-                sandboxPolicy: { type: 'workspaceWrite' }
+                sandboxPolicy: buildCodexSandboxPolicy('workspace-write')
             };
         case 'yolo':
             return {
                 approvalPolicy: 'never',
                 sandbox: 'danger-full-access',
-                sandboxPolicy: { type: 'dangerFullAccess' }
+                sandboxPolicy: buildCodexSandboxPolicy('danger-full-access')
             };
     }
 
@@ -45,5 +67,8 @@ export function resolveCodexPermissionModeConfig(mode: CodexPermissionMode): Cod
 
 export function buildCodexPermissionModeCliArgs(mode: Exclude<CodexPermissionMode, 'default'>): string[] {
     const config = resolveCodexPermissionModeConfig(mode);
+    if (typeof config.approvalPolicy !== 'string') {
+        throw new Error('Granular Codex approval policy cannot be passed as CLI args');
+    }
     return ['--ask-for-approval', config.approvalPolicy, '--sandbox', config.sandbox];
 }

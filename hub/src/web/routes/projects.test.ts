@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { Hono } from 'hono'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { SyncEngine } from '../../sync/syncEngine'
 import type { WebAppEnv } from '../middleware/auth'
 import { createProjectsRoutes } from './projects'
@@ -110,6 +112,66 @@ describe('projects routes', () => {
                 cwd: '/tmp/project',
                 command: 'codex',
                 sessionId: 'session-active'
+            }
+        })
+    })
+
+    it('normalizes home-relative project paths before matching native codex sessions', async () => {
+        const createCalls: Array<{ namespace: string; path: string; name?: string }> = []
+        const projectPath = join(homedir(), 'Code', 'demo-project')
+        const app = createApp({
+            createProject: (namespace: string, input: { path: string; name?: string }) => {
+                createCalls.push({ namespace, ...input })
+                return {
+                    id: 'project-tilde',
+                    namespace,
+                    path: input.path,
+                    name: input.name ?? null,
+                    createdAt: 10,
+                    updatedAt: 20
+                }
+            },
+            discoverNativeSessions: async () => [
+                {
+                    tmuxSession: 'hapi-demo',
+                    tmuxPane: '%9',
+                    cwd: projectPath,
+                    command: 'codex',
+                    sessionId: 'session-demo'
+                }
+            ]
+        })
+
+        const response = await app.request('/api/projects', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                path: '～/Code/demo-project/',
+                name: 'demo project'
+            })
+        })
+
+        expect(response.status).toBe(200)
+        expect(createCalls).toEqual([{
+            namespace: 'default',
+            path: projectPath,
+            name: 'demo project'
+        }])
+        expect(await response.json()).toEqual({
+            project: {
+                id: 'project-tilde',
+                namespace: 'default',
+                path: projectPath,
+                name: 'demo project',
+                createdAt: 10,
+                updatedAt: 20
+            },
+            nativeSession: {
+                tmuxSession: 'hapi-demo',
+                tmuxPane: '%9',
+                cwd: projectPath,
+                command: 'codex',
+                sessionId: 'session-demo'
             }
         })
     })

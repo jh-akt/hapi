@@ -44,6 +44,12 @@ export function registerAppServerPermissionHandlers(args: {
 }): void {
     const { client, permissionHandler, onUserInputRequest } = args;
 
+    const registerUnsupported = (method: Parameters<typeof client.registerRequestHandler>[0]) => {
+        client.registerRequestHandler(method, () => {
+            throw new Error(`Codex app-server server request is not supported by HAPI yet: ${method}`);
+        });
+    };
+
     client.registerRequestHandler('item/commandExecution/requestApproval', async (params) => {
         const record = asRecord(params) ?? {};
         const toolCallId = asString(record.itemId) ?? randomUUID();
@@ -102,4 +108,11 @@ export function registerAppServerPermissionHandlers(args: {
 
         return result;
     });
+
+    registerUnsupported('mcpServer/elicitation/request');
+    registerUnsupported('item/permissions/requestApproval');
+    registerUnsupported('item/tool/call');
+    registerUnsupported('account/chatgptAuthTokens/refresh');
+    registerUnsupported('applyPatchApproval');
+    registerUnsupported('execCommandApproval');
 }

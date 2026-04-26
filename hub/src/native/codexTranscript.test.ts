@@ -21,6 +21,8 @@ function writeTranscriptFile(options: {
     sessionId: string
     cwd: string
     timestamp: string
+    source?: string
+    originator?: string
     userMessages?: string[]
     agentMessages?: string[]
     includeToolCall?: boolean
@@ -37,8 +39,8 @@ function writeTranscriptFile(options: {
                 id: options.sessionId,
                 timestamp: options.timestamp,
                 cwd: options.cwd,
-                source: 'cli',
-                originator: 'codex-tui'
+                source: options.source ?? 'cli',
+                originator: options.originator ?? 'codex-tui'
             }
         }),
         ...(options.userMessages ?? []).map((message) => JSON.stringify({
@@ -197,6 +199,47 @@ describe('syncNativeCodexTranscript', () => {
         expect(result.messages[0]).toMatchObject({
             role: 'user',
             text: 'mac deamon configured?'
+        })
+    })
+
+    it('imports Codex Desktop vscode transcripts for native resumed sessions', () => {
+        const codexHomeDir = makeTempCodexHome()
+        const sessionId = '019dc22e-433a-7d91-b05c-f0d51c1812a0'
+
+        writeTranscriptFile({
+            codexHomeDir,
+            fileName: `rollout-2026-04-25T09-08-25-${sessionId}.jsonl`,
+            sessionId,
+            cwd: '/Users/demo/project',
+            timestamp: '2026-04-25T01:08:25.024Z',
+            source: 'vscode',
+            originator: 'Codex Desktop',
+            userMessages: ['continue the hapi work'],
+            agentMessages: ['Reading the current HAPI session state.'],
+            mtimeMs: Date.now()
+        })
+
+        const state = createNativeCodexTranscriptState(sessionId)
+        const result = syncNativeCodexTranscript(state, {
+            cwd: '/Users/demo/project',
+            hintedSessionId: sessionId,
+            snapshotText: '› continue the hapi work',
+            codexHomeDir
+        })
+
+        expect(result.active).toBe(true)
+        expect(result.codexSessionId).toBe(sessionId)
+        expect(result.messages).toHaveLength(2)
+        expect(result.messages[0]).toMatchObject({
+            role: 'user',
+            text: 'continue the hapi work'
+        })
+        expect(result.messages[1]).toMatchObject({
+            role: 'agent',
+            body: {
+                type: 'message',
+                message: 'Reading the current HAPI session state.'
+            }
         })
     })
 })

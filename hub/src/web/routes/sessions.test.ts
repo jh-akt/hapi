@@ -287,6 +287,66 @@ describe('sessions routes', () => {
         }])
     })
 
+    it('proxies allowed codex app-server methods for remote Codex sessions', async () => {
+        const session = createSession()
+        const calls: Array<{ sessionId: string; method: string; params: unknown }> = []
+        const engine = {
+            resolveSessionAccess: () => ({ ok: true, sessionId: session.id, session }),
+            applySessionConfig: async () => {},
+            codexAppServer: async (sessionId: string, method: string, params: unknown) => {
+                calls.push({ sessionId, method, params })
+                return { data: [], nextCursor: null, backwardsCursor: null }
+            }
+        } as Partial<SyncEngine>
+
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => {
+            c.set('namespace', 'default')
+            await next()
+        })
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/sessions/session-1/codex/app-server', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ method: 'thread/list', params: { archived: false } })
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ data: [], nextCursor: null, backwardsCursor: null })
+        expect(calls).toEqual([{
+            sessionId: 'session-1',
+            method: 'thread/list',
+            params: { archived: false }
+        }])
+    })
+
+    it('rejects unsupported codex app-server proxy methods', async () => {
+        const session = createSession()
+        const engine = {
+            resolveSessionAccess: () => ({ ok: true, sessionId: session.id, session }),
+            applySessionConfig: async () => {}
+        } as Partial<SyncEngine>
+
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => {
+            c.set('namespace', 'default')
+            await next()
+        })
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/sessions/session-1/codex/app-server', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ method: 'fs/readFile', params: { path: '/tmp/a' } })
+        })
+
+        expect(response.status).toBe(403)
+        expect(await response.json()).toEqual({
+            error: 'Unsupported Codex app-server method'
+        })
+    })
+
     it('starts codex review for remote Codex sessions', async () => {
         const session = createSession()
         const reviewCalls: Array<{ sessionId: string; params: Record<string, unknown> }> = []

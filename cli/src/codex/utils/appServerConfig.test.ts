@@ -4,6 +4,19 @@ import { codexSystemPrompt } from './systemPrompt';
 
 describe('appServerConfig', () => {
     const mcpServers = { hapi: { command: 'node', args: ['mcp'] } };
+    const readOnlySandboxPolicy = {
+        type: 'readOnly',
+        access: { type: 'fullAccess' },
+        networkAccess: false
+    };
+    const workspaceWriteSandboxPolicy = {
+        type: 'workspaceWrite',
+        writableRoots: [],
+        readOnlyAccess: { type: 'fullAccess' },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+    };
 
     it('applies CLI overrides when permission mode is default', () => {
         const params = buildThreadStartParams({
@@ -18,6 +31,8 @@ describe('appServerConfig', () => {
         expect(params.approvalPolicy).toBe('never');
         expect(params.baseInstructions).toBe(codexSystemPrompt);
         expect(params.developerInstructions).toBe(codexSystemPrompt);
+        expect(params.experimentalRawEvents).toBe(false);
+        expect(params.persistExtendedHistory).toBe(true);
         expect(params.config).toEqual({
             'mcp_servers.hapi': {
                 command: 'node',
@@ -112,9 +127,9 @@ describe('appServerConfig', () => {
 
         expect(params.threadId).toBe('thread-1');
         expect(params.cwd).toBe('/workspace/project');
-        expect(params.input).toEqual([{ type: 'text', text: 'hello' }]);
+        expect(params.input).toEqual([{ type: 'text', text: 'hello', text_elements: [] }]);
         expect(params.approvalPolicy).toBe('never');
-        expect(params.sandboxPolicy).toEqual({ type: 'readOnly' });
+        expect(params.sandboxPolicy).toEqual(readOnlySandboxPolicy);
         expect(params.collaborationMode).toEqual({
             mode: 'default',
             settings: {
@@ -163,6 +178,7 @@ describe('appServerConfig', () => {
             mode: 'plan',
             settings: {
                 model: 'o3',
+                reasoning_effort: null,
                 developer_instructions: `${codexSystemPrompt}\n\nOnly respond in Chinese.`
             }
         });
@@ -192,6 +208,7 @@ describe('appServerConfig', () => {
             mode: 'default',
             settings: {
                 model: 'o3',
+                reasoning_effort: null,
                 developer_instructions: codexSystemPrompt
             }
         });
@@ -207,11 +224,12 @@ describe('appServerConfig', () => {
         });
 
         expect(params.approvalPolicy).toBe('on-failure');
-        expect(params.sandboxPolicy).toEqual({ type: 'workspaceWrite' });
+        expect(params.sandboxPolicy).toEqual(workspaceWriteSandboxPolicy);
         expect(params.collaborationMode).toEqual({
             mode: 'default',
             settings: {
                 model: 'o3',
+                reasoning_effort: null,
                 developer_instructions: codexSystemPrompt
             }
         });
@@ -231,6 +249,7 @@ describe('appServerConfig', () => {
             mode: 'default',
             settings: {
                 model: 'gpt-5',
+                reasoning_effort: null,
                 developer_instructions: codexSystemPrompt
             }
         });

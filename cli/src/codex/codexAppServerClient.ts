@@ -7,6 +7,7 @@ import type {
     CodexAppServerResult,
     InitializeParams,
     InitializeResponse,
+    NativeCodexAppServerServerRequest,
     ReviewStartParams,
     ReviewStartResponse,
     ThreadArchiveParams,
@@ -54,6 +55,9 @@ type JsonRpcLiteResponse = {
     };
 };
 
+type ServerRequestMethod = NativeCodexAppServerServerRequest['method'];
+type ServerRequestParams<TMethod extends ServerRequestMethod> =
+    Extract<NativeCodexAppServerServerRequest, { method: TMethod }>['params'];
 type RequestHandler = (params: unknown) => Promise<unknown> | unknown;
 
 type PendingRequest = {
@@ -142,8 +146,11 @@ export class CodexAppServerClient {
         this.notificationHandler = handler;
     }
 
-    registerRequestHandler(method: string, handler: RequestHandler): void {
-        this.requestHandlers.set(method, handler);
+    registerRequestHandler<TMethod extends ServerRequestMethod>(
+        method: TMethod,
+        handler: (params: ServerRequestParams<TMethod>) => Promise<unknown> | unknown
+    ): void {
+        this.requestHandlers.set(method, handler as RequestHandler);
     }
 
     async initialize(params: InitializeParams): Promise<InitializeResponse> {

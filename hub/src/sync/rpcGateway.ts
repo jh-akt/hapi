@@ -1,4 +1,10 @@
 import type { CodexCollaborationMode, PermissionMode } from '@hapi/protocol/types'
+import type {
+    CodexAppServerMethod,
+    CodexAppServerParams,
+    CodexAppServerResult
+} from '@hapi/protocol/codex-app-server'
+import { isCodexAppServerMethod } from '@hapi/protocol/codex-app-server'
 import type { Server } from 'socket.io'
 import type { RpcRegistry } from '../socket/rpcRegistry'
 
@@ -202,16 +208,6 @@ export type RpcCodexReviewStartResponse = {
     turn: RpcCodexTurn
     reviewThreadId: string
 }
-
-type RpcCodexAppServerMethod =
-    | 'thread/list'
-    | 'thread/read'
-    | 'thread/fork'
-    | 'thread/archive'
-    | 'thread/unarchive'
-    | 'thread/rollback'
-    | 'turn/steer'
-    | 'review/start'
 
 const CODEX_APP_SERVER_RPC_METHOD = 'codex-app-server'
 
@@ -435,13 +431,24 @@ export class RpcGateway {
         return await this.codexAppServerRpc(sessionId, 'review/start', params) as RpcCodexReviewStartResponse
     }
 
+    async codexAppServer<TMethod extends CodexAppServerMethod>(
+        sessionId: string,
+        method: TMethod,
+        params: CodexAppServerParams<TMethod>
+    ): Promise<CodexAppServerResult<TMethod>> {
+        if (!isCodexAppServerMethod(method)) {
+            throw new Error(`Unsupported Codex app-server RPC method: ${method}`)
+        }
+        return await this.codexAppServerRpc(sessionId, method, params) as CodexAppServerResult<TMethod>
+    }
+
     private async sessionRpc(sessionId: string, method: string, params: unknown): Promise<unknown> {
         return await this.rpcCall(`${sessionId}:${method}`, params)
     }
 
     private async codexAppServerRpc(
         sessionId: string,
-        method: RpcCodexAppServerMethod,
+        method: CodexAppServerMethod,
         params: unknown
     ): Promise<unknown> {
         return await this.sessionRpc(sessionId, CODEX_APP_SERVER_RPC_METHOD, { method, params })

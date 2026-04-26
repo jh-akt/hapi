@@ -8,6 +8,11 @@
  */
 
 import { isSessionArchivedMetadata } from '@hapi/protocol'
+import type {
+    CodexAppServerMethod,
+    CodexAppServerParams,
+    CodexAppServerResult
+} from '@hapi/protocol/codex-app-server'
 import type { CodexCollaborationMode, DecryptedMessage, PermissionMode, Session, SyncEvent } from '@hapi/protocol/types'
 import type { Server } from 'socket.io'
 import type { Store } from '../store'
@@ -847,6 +852,14 @@ export class SyncEngine {
 
     async startCodexReview(sessionId: string, params: RpcCodexReviewStartParams): Promise<RpcCodexReviewStartResponse> {
         return await this.rpcGateway.startCodexReview(sessionId, params)
+    }
+
+    async codexAppServer<TMethod extends CodexAppServerMethod>(
+        sessionId: string,
+        method: TMethod,
+        params: CodexAppServerParams<TMethod>
+    ): Promise<CodexAppServerResult<TMethod>> {
+        return await this.rpcGateway.codexAppServer(sessionId, method, params)
     }
 
     async checkPathsExist(machineId: string, paths: string[]): Promise<Record<string, boolean>> {

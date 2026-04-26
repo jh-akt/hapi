@@ -1,4 +1,5 @@
 import { logger } from '@/ui/logger';
+import type { NativeCodexAppServerNotification } from '../appServerTypes';
 
 type ConvertedEvent = {
     type: string;
@@ -245,9 +246,19 @@ export class AppServerEventConverter {
         return [msg as ConvertedEvent];
     }
 
-    handleNotification(method: string, params: unknown): ConvertedEvent[] {
+    handleNotification(notification: NativeCodexAppServerNotification): ConvertedEvent[];
+    handleNotification(method: string, params: unknown): ConvertedEvent[];
+    handleNotification(notificationOrMethod: NativeCodexAppServerNotification | string, params?: unknown): ConvertedEvent[] {
         const events: ConvertedEvent[] = [];
-        const paramsRecord = asRecord(params) ?? {};
+        const method = typeof notificationOrMethod === 'string'
+            ? notificationOrMethod
+            : notificationOrMethod.method;
+        const notificationParams = typeof notificationOrMethod === 'string'
+            ? params
+            : 'params' in notificationOrMethod
+                ? notificationOrMethod.params
+                : undefined;
+        const paramsRecord = asRecord(notificationParams) ?? {};
 
         if (method.startsWith('codex/event/')) {
             return this.handleWrappedCodexEvent(paramsRecord) ?? events;
@@ -536,7 +547,7 @@ export class AppServerEventConverter {
             }
         }
 
-        logger.debug('[AppServerEventConverter] Unhandled notification', { method, params });
+        logger.debug('[AppServerEventConverter] Unhandled notification', { method, params: notificationParams });
         return events;
     }
 

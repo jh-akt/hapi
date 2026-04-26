@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { normalizeFilesystemPath } from '../utils/filesystemPath'
 
 const MAX_RECENT_USER_MESSAGES = 5
 const SUPPORTED_CATALOG_SOURCES = new Set(['cli', 'vscode'])
@@ -36,7 +37,7 @@ export function listNativeCodexSessionCatalog(options?: {
         if (!current || meta.updatedAt >= current.updatedAt) {
             deduped.set(meta.codexSessionId, {
                 codexSessionId: meta.codexSessionId,
-                cwd: meta.cwd,
+                cwd: normalizeFilesystemPath(meta.cwd) || meta.cwd,
                 timestamp: meta.timestamp,
                 updatedAt: meta.updatedAt,
                 recentUserMessages: [...meta.recentUserMessages]

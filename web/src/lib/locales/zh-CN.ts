@@ -93,6 +93,8 @@ export default {
   'dialog.unarchive.confirming': '恢复中…',
   'session.forkFailed.title': 'Fork 会话失败',
   'session.forkFailed.body': '无法基于当前会话创建新会话。',
+  'session.activateFailed.title': '激活会话失败',
+  'session.activateFailed.body': '无法激活这个会话。',
   'session.createInDirectoryFailed.title': '创建会话失败',
   'session.createInDirectoryFailed.body': '无法在该目录下创建新会话。',
 

@@ -9,7 +9,7 @@ import type {
     ThreadStartParams,
     TurnStartParams
 } from '../appServerTypes';
-import { resolveCodexPermissionModeConfig } from './permissionModeConfig';
+import { buildCodexSandboxPolicy, resolveCodexPermissionModeConfig } from './permissionModeConfig';
 
 function resolveApprovalPolicy(mode: EnhancedMode): ApprovalPolicy {
     return resolveCodexPermissionModeConfig(mode.permissionMode).approvalPolicy;
@@ -26,18 +26,20 @@ function resolveSandboxPolicy(mode: EnhancedMode): SandboxPolicy {
 function resolveSandboxPolicyOverride(value: CodexCliOverrides['sandbox'] | undefined): SandboxPolicy | undefined {
     switch (value) {
         case 'read-only':
-            return { type: 'readOnly' };
+            return buildCodexSandboxPolicy('read-only');
         case 'workspace-write':
-            return { type: 'workspaceWrite' };
+            return buildCodexSandboxPolicy('workspace-write');
         case 'danger-full-access':
-            return { type: 'dangerFullAccess' };
+            return buildCodexSandboxPolicy('danger-full-access');
         default:
             return undefined;
     }
 }
 
-function buildMcpServerConfig(mcpServers: McpServersConfig): Record<string, unknown> {
-    const config: Record<string, unknown> = {};
+type AppServerConfig = NonNullable<ThreadStartParams['config']>;
+
+function buildMcpServerConfig(mcpServers: McpServersConfig): AppServerConfig {
+    const config: AppServerConfig = {};
 
     for (const [name, server] of Object.entries(mcpServers)) {
         config[`mcp_servers.${name}`] = {
@@ -95,6 +97,8 @@ export function buildThreadStartParams(args: {
         sandbox: resolvedSandbox,
         baseInstructions,
         developerInstructions: resolvedDeveloperInstructions,
+        experimentalRawEvents: false,
+        persistExtendedHistory: true,
         ...(Object.keys(configWithInstructions).length > 0 ? { config: configWithInstructions } : {})
     };
 
@@ -122,7 +126,7 @@ export function buildTurnStartParams(args: {
     const params: TurnStartParams = {
         threadId: args.threadId,
         cwd: args.cwd,
-        input: [{ type: 'text', text: args.message }]
+        input: [{ type: 'text', text: args.message, text_elements: [] }]
     };
 
     const allowCliOverrides = args.mode?.permissionMode === 'default';
@@ -152,7 +156,7 @@ export function buildTurnStartParams(args: {
             mode: collaborationMode,
             settings: {
                 model,
-                ...(args.mode?.modelReasoningEffort ? { reasoning_effort: args.mode.modelReasoningEffort } : {}),
+                reasoning_effort: args.mode?.modelReasoningEffort ?? null,
                 developer_instructions: developerInstructions
             }
         };

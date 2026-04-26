@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { SyncEngine } from '../../sync/syncEngine'
+import { normalizeFilesystemPath } from '../../utils/filesystemPath'
 import type { WebAppEnv } from '../middleware/auth'
 import { requireSyncEngine } from './guards'
 
@@ -9,19 +10,11 @@ const createProjectSchema = z.object({
     name: z.string().trim().min(1).max(255).optional()
 })
 
-function normalizeProjectPath(path: string): string {
-    const normalized = path.trim().replace(/\\/g, '/')
-    if (normalized === '/' || /^[A-Za-z]:\/$/.test(normalized)) {
-        return normalized
-    }
-    return normalized.replace(/\/+$/, '')
-}
-
 function getProjectPath(path: string | undefined): string | null {
     if (!path) {
         return null
     }
-    const normalized = normalizeProjectPath(path)
+    const normalized = normalizeFilesystemPath(path)
     return normalized.length > 0 ? normalized : null
 }
 
@@ -51,7 +44,7 @@ export function createProjectsRoutes(getSyncEngine: () => SyncEngine | null): Ho
         }
 
         const namespace = c.get('namespace')
-        const path = normalizeProjectPath(parsed.data.path)
+        const path = normalizeFilesystemPath(parsed.data.path)
         if (path.length === 0) {
             return c.json({ error: 'Invalid body' }, 400)
         }
