@@ -491,7 +491,7 @@ export function SessionChat(props: {
 
             <AssistantRuntimeProvider runtime={runtime}>
                 <div className="relative flex min-h-0 flex-1 flex-col">
-                    {showThread ? (
+                    <div className={showThread ? 'contents' : 'hidden'} aria-hidden={!showThread}>
                         <HappyThread
                             key={props.session.id}
                             api={props.api}
@@ -513,9 +513,10 @@ export function SessionChat(props: {
                             messagesVersion={props.messagesVersion}
                             forceScrollToken={forceScrollToken}
                         />
-                    ) : (
+                    </div>
+                    {!showThread ? (
                         <div className="min-h-0 flex-1" />
-                    )}
+                    ) : null}
 
                     <HappyComposer
                         key={props.session.id}

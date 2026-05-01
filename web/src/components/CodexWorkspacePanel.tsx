@@ -249,7 +249,7 @@ export function CodexWorkspacePanel(props: {
             threadId: threadId ?? '',
             includeTurns: false
         }),
-        enabled: Boolean(threadId),
+        enabled: tab === 'summary' && Boolean(threadId),
         staleTime: 3_000
     })
 
@@ -260,7 +260,7 @@ export function CodexWorkspacePanel(props: {
             limit: 50,
             sortDirection: 'desc'
         }),
-        enabled: Boolean(threadId),
+        enabled: tab === 'summary' && Boolean(threadId),
         staleTime: 10_000
     })
 
