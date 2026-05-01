@@ -61,10 +61,10 @@ export function useSessionActions(
         }
         await queryClient.invalidateQueries({ queryKey: queryKeys.sessions })
         await queryClient.invalidateQueries({ queryKey: queryKeys.codexSessions })
-        await queryClient.invalidateQueries({ queryKey: queryKeys.nativeSessions })
         if (codexThreadActionSupported && codexThreadId) {
             for (const id of sessionIds) {
                 await queryClient.invalidateQueries({ queryKey: queryKeys.codexThread(id, codexThreadId) })
+                await queryClient.invalidateQueries({ queryKey: queryKeys.codexThreadMessages(id, codexThreadId) })
                 await queryClient.invalidateQueries({ queryKey: queryKeys.codexThreadTurns(id, codexThreadId) })
             }
         }
@@ -166,7 +166,6 @@ export function useSessionActions(
         onSuccess: async () => {
             await queryClient.invalidateQueries({ queryKey: queryKeys.sessions })
             await queryClient.invalidateQueries({ queryKey: queryKeys.codexSessions })
-            await queryClient.invalidateQueries({ queryKey: queryKeys.nativeSessions })
         },
     })
 

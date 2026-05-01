@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getSessionModelLabel } from './sessionModelLabel'
+import { getSessionModelLabel, getSessionModelReasoningEffortLabel } from './sessionModelLabel'
 
 describe('getSessionModelLabel', () => {
     it('prefers the explicit session model', () => {
@@ -18,5 +18,19 @@ describe('getSessionModelLabel', () => {
 
     it('returns null when no model is available', () => {
         expect(getSessionModelLabel({})).toBeNull()
+    })
+})
+
+describe('getSessionModelReasoningEffortLabel', () => {
+    it('renders friendly labels for Codex reasoning effort', () => {
+        expect(getSessionModelReasoningEffortLabel({ modelReasoningEffort: 'xhigh' })).toEqual({
+            key: 'misc.reasoningEffort',
+            value: 'XHigh'
+        })
+    })
+
+    it('returns null when reasoning effort is not explicitly set', () => {
+        expect(getSessionModelReasoningEffortLabel({ modelReasoningEffort: null })).toBeNull()
+        expect(getSessionModelReasoningEffortLabel({ modelReasoningEffort: 'default' })).toBeNull()
     })
 })

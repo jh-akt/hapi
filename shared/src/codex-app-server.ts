@@ -21,6 +21,9 @@ import type {
     McpServerToolCallParams,
     McpServerToolCallResponse,
     MemoryResetResponse,
+    Model,
+    ModelListParams,
+    ModelListResponse,
     PluginInstallParams,
     PluginInstallResponse,
     PluginListParams,
@@ -105,6 +108,9 @@ export type {
     McpServerToolCallParams,
     McpServerToolCallResponse,
     MemoryResetResponse,
+    Model,
+    ModelListParams,
+    ModelListResponse,
     PluginInstallParams,
     PluginInstallResponse,
     PluginListParams,
@@ -187,6 +193,7 @@ export interface CodexAppServerMethodMap {
     'turn/steer': CodexAppServerMethodSpec<NativeCodexAppServerParams<'turn/steer'>, TurnSteerResponse>
     'turn/interrupt': CodexAppServerMethodSpec<NativeCodexAppServerParams<'turn/interrupt'>, TurnInterruptResponse>
     'review/start': CodexAppServerMethodSpec<NativeCodexAppServerParams<'review/start'>, ReviewStartResponse>
+    'model/list': CodexAppServerMethodSpec<NativeCodexAppServerParams<'model/list'>, ModelListResponse>
     'skills/list': CodexAppServerMethodSpec<NativeCodexAppServerParams<'skills/list'>, SkillsListResponse>
     'plugin/list': CodexAppServerMethodSpec<NativeCodexAppServerParams<'plugin/list'>, PluginListResponse>
     'plugin/read': CodexAppServerMethodSpec<NativeCodexAppServerParams<'plugin/read'>, PluginReadResponse>
@@ -212,6 +219,7 @@ export type CodexAppServerFeatureGroup =
     | 'thread'
     | 'turn'
     | 'review'
+    | 'models'
     | 'skills'
     | 'plugins'
     | 'apps'
@@ -246,6 +254,7 @@ export const CODEX_APP_SERVER_CAPABILITIES = [
     { method: 'turn/steer', featureGroup: 'turn', experimental: false, minimumCodexCliVersion: '0.122.0', webVisible: true, failureCopy: 'Failed to steer Codex turn.' },
     { method: 'turn/interrupt', featureGroup: 'turn', experimental: false, minimumCodexCliVersion: '0.122.0', webVisible: true, failureCopy: 'Failed to interrupt Codex turn.' },
     { method: 'review/start', featureGroup: 'review', experimental: false, minimumCodexCliVersion: '0.122.0', webVisible: true, failureCopy: 'Failed to start Codex review.' },
+    { method: 'model/list', featureGroup: 'models', experimental: false, minimumCodexCliVersion: '0.122.0', webVisible: true, failureCopy: 'Failed to list Codex models.' },
     { method: 'skills/list', featureGroup: 'skills', experimental: false, minimumCodexCliVersion: '0.122.0', webVisible: true, failureCopy: 'Failed to list Codex skills.' },
     { method: 'plugin/list', featureGroup: 'plugins', experimental: true, minimumCodexCliVersion: '0.122.0', webVisible: true, failureCopy: 'Failed to list Codex plugins.' },
     { method: 'plugin/read', featureGroup: 'plugins', experimental: true, minimumCodexCliVersion: '0.122.0', webVisible: true, failureCopy: 'Failed to read Codex plugin.' },

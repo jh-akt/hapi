@@ -133,6 +133,45 @@ describe('sessions routes', () => {
         ])
     })
 
+    it('applies model changes for remote Codex sessions', async () => {
+        const { app, applySessionConfigCalls } = createApp(createSession())
+
+        const response = await app.request('/api/sessions/session-1/model', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ model: 'gpt-5.4-mini' })
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ ok: true })
+        expect(applySessionConfigCalls).toEqual([
+            ['session-1', { model: 'gpt-5.4-mini' }]
+        ])
+    })
+
+    it('rejects model changes for local Codex sessions', async () => {
+        const session = createSession({
+            agentState: {
+                controlledByUser: true,
+                requests: {},
+                completedRequests: {}
+            }
+        })
+        const { app, applySessionConfigCalls } = createApp(session)
+
+        const response = await app.request('/api/sessions/session-1/model', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ model: 'gpt-5.4-mini' })
+        })
+
+        expect(response.status).toBe(409)
+        expect(await response.json()).toEqual({
+            error: 'Model selection can only be changed for remote Codex sessions'
+        })
+        expect(applySessionConfigCalls).toEqual([])
+    })
+
     it('forks a session with an optional target directory', async () => {
         const session = createSession()
         const forkCalls: Array<{ sessionId: string; namespace: string; directory?: string }> = []
@@ -319,6 +358,225 @@ describe('sessions routes', () => {
             method: 'thread/list',
             params: { archived: false }
         }])
+    })
+
+    it('reads codex thread history through the online runner machine when available', async () => {
+        const session = createSession({
+            metadata: {
+                path: '/tmp/project',
+                host: 'localhost',
+                flavor: 'codex',
+                machineId: 'machine-1',
+                codexSessionId: 'thread-1'
+            }
+        })
+        const sessionRpcCalls: unknown[] = []
+        const machineReadCalls: Array<{ machineId: string; params: unknown }> = []
+        const engine = {
+            resolveSessionAccess: () => ({ ok: true, sessionId: session.id, session }),
+            applySessionConfig: async () => {},
+            getMachineByNamespace: () => ({
+                id: 'machine-1',
+                namespace: 'default',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: true,
+                activeAt: 1,
+                metadata: {
+                    host: 'localhost',
+                    platform: 'darwin',
+                    happyCliVersion: '0.0.0'
+                },
+                metadataVersion: 1,
+                runnerState: null,
+                runnerStateVersion: 1
+            }),
+            readCodexThreadFromMachine: async (machineId: string, params: unknown) => {
+                machineReadCalls.push({ machineId, params })
+                return { thread: { id: 'thread-1', turns: [{ id: 'turn-1' }] } }
+            },
+            codexAppServer: async (...args: unknown[]) => {
+                sessionRpcCalls.push(args)
+                throw new Error('session RPC should not be used')
+            }
+        } as Partial<SyncEngine>
+
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => {
+            c.set('namespace', 'default')
+            await next()
+        })
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/sessions/session-1/codex/app-server', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                method: 'thread/read',
+                params: { threadId: 'thread-1', includeTurns: true }
+            })
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({
+            thread: { id: 'thread-1', turns: [{ id: 'turn-1' }] }
+        })
+        expect(machineReadCalls).toEqual([{
+            machineId: 'machine-1',
+            params: { threadId: 'thread-1', includeTurns: true }
+        }])
+        expect(sessionRpcCalls).toEqual([])
+    })
+
+    it('lists codex models through the online runner machine when available', async () => {
+        const session = createSession({
+            metadata: {
+                path: '/tmp/project',
+                host: 'localhost',
+                flavor: 'codex',
+                machineId: 'machine-1',
+                codexSessionId: 'thread-1'
+            }
+        })
+        const sessionRpcCalls: unknown[] = []
+        const machineCalls: Array<{ machineId: string; method: string; params: unknown }> = []
+        const engine = {
+            resolveSessionAccess: () => ({ ok: true, sessionId: session.id, session }),
+            applySessionConfig: async () => {},
+            getMachineByNamespace: () => ({
+                id: 'machine-1',
+                namespace: 'default',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: true,
+                activeAt: 1,
+                metadata: {
+                    host: 'localhost',
+                    platform: 'darwin',
+                    happyCliVersion: '0.0.0'
+                },
+                metadataVersion: 1,
+                runnerState: null,
+                runnerStateVersion: 1
+            }),
+            codexAppServerFromMachine: async (machineId: string, method: string, params: unknown) => {
+                machineCalls.push({ machineId, method, params })
+                return {
+                    data: [{ id: 'gpt-5.4', model: 'gpt-5.4', displayName: 'GPT-5.4' }],
+                    nextCursor: null
+                }
+            },
+            codexAppServer: async (...args: unknown[]) => {
+                sessionRpcCalls.push(args)
+                throw new Error('session RPC should not be used')
+            }
+        } as Partial<SyncEngine>
+
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => {
+            c.set('namespace', 'default')
+            await next()
+        })
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/sessions/session-1/codex/app-server', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                method: 'model/list',
+                params: { limit: 200, includeHidden: false }
+            })
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({
+            data: [{ id: 'gpt-5.4', model: 'gpt-5.4', displayName: 'GPT-5.4' }],
+            nextCursor: null
+        })
+        expect(machineCalls).toEqual([{
+            machineId: 'machine-1',
+            method: 'model/list',
+            params: { limit: 200, includeHidden: false }
+        }])
+        expect(sessionRpcCalls).toEqual([])
+    })
+
+    it('lists codex thread turns through the online runner machine when available', async () => {
+        const session = createSession({
+            metadata: {
+                path: '/tmp/project',
+                host: 'localhost',
+                flavor: 'codex',
+                machineId: 'machine-1',
+                codexSessionId: 'thread-1'
+            }
+        })
+        const sessionRpcCalls: unknown[] = []
+        const machineCalls: Array<{ machineId: string; method: string; params: unknown }> = []
+        const engine = {
+            resolveSessionAccess: () => ({ ok: true, sessionId: session.id, session }),
+            applySessionConfig: async () => {},
+            getMachineByNamespace: () => ({
+                id: 'machine-1',
+                namespace: 'default',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: true,
+                activeAt: 1,
+                metadata: {
+                    host: 'localhost',
+                    platform: 'darwin',
+                    happyCliVersion: '0.0.0'
+                },
+                metadataVersion: 1,
+                runnerState: null,
+                runnerStateVersion: 1
+            }),
+            codexAppServerFromMachine: async (machineId: string, method: string, params: unknown) => {
+                machineCalls.push({ machineId, method, params })
+                return {
+                    data: [{ id: 'turn-1', items: [] }],
+                    nextCursor: 'next',
+                    backwardsCursor: null
+                }
+            },
+            codexAppServer: async (...args: unknown[]) => {
+                sessionRpcCalls.push(args)
+                throw new Error('session RPC should not be used')
+            }
+        } as Partial<SyncEngine>
+
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => {
+            c.set('namespace', 'default')
+            await next()
+        })
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/sessions/session-1/codex/app-server', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                method: 'thread/turns/list',
+                params: { threadId: 'thread-1', limit: 4, sortDirection: 'desc' }
+            })
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({
+            data: [{ id: 'turn-1', items: [] }],
+            nextCursor: 'next',
+            backwardsCursor: null
+        })
+        expect(machineCalls).toEqual([{
+            machineId: 'machine-1',
+            method: 'thread/turns/list',
+            params: { threadId: 'thread-1', limit: 4, sortDirection: 'desc' }
+        }])
+        expect(sessionRpcCalls).toEqual([])
     })
 
     it('rejects unsupported codex app-server proxy methods', async () => {

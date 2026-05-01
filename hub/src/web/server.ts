@@ -118,7 +118,7 @@ function createWebApp(options: {
     app.route('/api', createProjectsRoutes(options.getSyncEngine))
     app.route('/api', createMessagesRoutes(options.getSyncEngine))
     app.route('/api', createPermissionsRoutes(options.getSyncEngine))
-    app.route('/api', createNativeSessionRoutes(options.getSyncEngine))
+    app.route('/api', createNativeSessionRoutes())
     app.route('/api', createMachinesRoutes(options.getSyncEngine))
     app.route('/api', createGitRoutes(options.getSyncEngine))
     app.route('/api', createPushRoutes(options.store, options.vapidPublicKey))

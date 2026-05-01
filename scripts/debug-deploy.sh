@@ -12,6 +12,5 @@ export HAPI_LAUNCHD_LABEL="${HAPI_LAUNCHD_LABEL:-com.hapi.hub.debug}"
 export HAPI_PUBLIC_URL="${HAPI_PUBLIC_URL:-https://hapi-debug.example.com}"
 export HAPI_LISTEN_HOST="${HAPI_LISTEN_HOST:-127.0.0.1}"
 export HAPI_LISTEN_PORT="${HAPI_LISTEN_PORT:-3007}"
-export HAPI_NATIVE_LEADER_PRIORITY="${HAPI_NATIVE_LEADER_PRIORITY:-100}"
 
 exec "$ROOT_DIR/scripts/public-deploy.sh" "$@"

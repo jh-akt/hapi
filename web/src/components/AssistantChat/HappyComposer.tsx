@@ -12,7 +12,7 @@ import {
     useRef,
     useState
 } from 'react'
-import type { AgentState, CodexCollaborationMode, PermissionMode } from '@/types/api'
+import type { AgentState, CodexCollaborationMode, CodexModel, PermissionMode } from '@/types/api'
 import type { Suggestion } from '@/hooks/useActiveSuggestions'
 import type { ConversationStatus } from '@/realtime/types'
 import { useActiveWord } from '@/hooks/useActiveWord'
@@ -29,7 +29,7 @@ import { StatusBar } from '@/components/AssistantChat/StatusBar'
 import { ComposerButtons } from '@/components/AssistantChat/ComposerButtons'
 import { AttachmentItem } from '@/components/AssistantChat/AttachmentItem'
 import { useTranslation } from '@/lib/use-translation'
-import { getModelOptionsForFlavor, getNextModelForFlavor } from './modelOptions'
+import { getModelOptionsForFlavor, getNextModelFromOptions, type ModelOption } from './modelOptions'
 import { getClaudeComposerEffortOptions } from './claudeEffortOptions'
 import { getCodexComposerReasoningEffortOptions } from './codexReasoningEffortOptions'
 
@@ -47,6 +47,8 @@ export function HappyComposer(props: {
     collaborationMode?: CodexCollaborationMode
     model?: string | null
     modelReasoningEffort?: string | null
+    modelOptions?: ModelOption[]
+    codexModels?: CodexModel[]
     effort?: string | null
     active?: boolean
     allowSendWhenInactive?: boolean
@@ -80,6 +82,8 @@ export function HappyComposer(props: {
         collaborationMode: rawCollaborationMode,
         model: rawModel,
         modelReasoningEffort: rawModelReasoningEffort,
+        modelOptions: providedModelOptions,
+        codexModels,
         effort: rawEffort,
         active = true,
         allowSendWhenInactive = false,
@@ -278,13 +282,30 @@ export function HappyComposer(props: {
         () => agentFlavor === 'codex' ? getCodexCollaborationModeOptions() : [],
         [agentFlavor]
     )
-    const claudeModelOptions = useMemo(
-        () => getModelOptionsForFlavor(agentFlavor, model),
-        [agentFlavor, model]
+    const modelOptions = useMemo(
+        () => providedModelOptions ?? getModelOptionsForFlavor(agentFlavor, model),
+        [providedModelOptions, agentFlavor, model]
+    )
+    const selectedCodexModel = useMemo(() => {
+        if (agentFlavor !== 'codex' || !codexModels?.length) {
+            return null
+        }
+        if (!model) {
+            return codexModels.find((candidate) => candidate.isDefault) ?? null
+        }
+        return codexModels.find((candidate) => candidate.model === model || candidate.id === model) ?? null
+    }, [agentFlavor, codexModels, model])
+    const supportedReasoningEfforts = useMemo(
+        () => selectedCodexModel
+            ? selectedCodexModel.supportedReasoningEfforts.map((effortOption) => effortOption.reasoningEffort)
+            : null,
+        [selectedCodexModel]
     )
     const codexReasoningEffortOptions = useMemo(
-        () => agentFlavor === 'codex' ? getCodexComposerReasoningEffortOptions(modelReasoningEffort) : [],
-        [agentFlavor, modelReasoningEffort]
+        () => agentFlavor === 'codex'
+            ? getCodexComposerReasoningEffortOptions(modelReasoningEffort, supportedReasoningEfforts)
+            : [],
+        [agentFlavor, modelReasoningEffort, supportedReasoningEfforts]
     )
     const claudeEffortOptions = useMemo(
         () => getClaudeComposerEffortOptions(effort),
@@ -385,14 +406,14 @@ export function HappyComposer(props: {
         const handleGlobalKeyDown = (e: globalThis.KeyboardEvent) => {
             if (e.key === 'm' && (e.metaKey || e.ctrlKey) && onModelChange && supportsModelChange(agentFlavor)) {
                 e.preventDefault()
-                onModelChange(getNextModelForFlavor(agentFlavor, model))
+                onModelChange(getNextModelFromOptions(modelOptions, model))
                 haptic('light')
             }
         }
 
         window.addEventListener('keydown', handleGlobalKeyDown)
         return () => window.removeEventListener('keydown', handleGlobalKeyDown)
-    }, [model, onModelChange, haptic, agentFlavor])
+    }, [model, onModelChange, haptic, agentFlavor, modelOptions])
 
     const handleChange = useCallback((e: ReactChangeEvent<HTMLTextAreaElement>) => {
         const selection = {
@@ -586,7 +607,7 @@ export function HappyComposer(props: {
                                 <div className="px-3 pb-1 text-xs font-semibold text-[var(--app-hint)]">
                                     {t('misc.model')}
                                 </div>
-                                {claudeModelOptions.map((option) => (
+                                {modelOptions.map((option) => (
                                     <button
                                         key={option.value ?? 'auto'}
                                         type="button"
@@ -726,7 +747,7 @@ export function HappyComposer(props: {
         showModelSettings,
         showModelReasoningEffortSettings,
         showEffortSettings,
-        claudeModelOptions,
+        modelOptions,
         codexReasoningEffortOptions,
         claudeEffortOptions,
         suggestions,

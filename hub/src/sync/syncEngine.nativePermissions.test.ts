@@ -49,33 +49,27 @@ function createNativeSession(): Session {
     }
 }
 
-describe('SyncEngine native permission routing', () => {
-    it('routes native approvals through the native session manager', async () => {
-        const approveNative = mock(async () => {})
+describe('SyncEngine native retirement routing', () => {
+    it('rejects native approvals after tmux retirement', async () => {
         const approveRpc = mock(async () => {})
         const nativeSession = createNativeSession()
         const engine = {
             getSession: () => nativeSession,
-            nativeSessions: {
-                approvePermission: approveNative
-            },
             rpcGateway: {
                 approvePermission: approveRpc
             }
         } as unknown as SyncEngine
 
-        await SyncEngine.prototype.approvePermission.call(engine, nativeSession.id, 'req-1', undefined, undefined, 'approved_for_session')
+        await expect(
+            SyncEngine.prototype.approvePermission.call(engine, nativeSession.id, 'req-1', undefined, undefined, 'approved_for_session')
+        ).rejects.toThrow('Native tmux sessions have been retired')
 
-        expect(approveNative).toHaveBeenCalledWith(nativeSession.id, 'req-1', 'approved_for_session')
         expect(approveRpc).not.toHaveBeenCalled()
     })
 
-    it('rejects native approvals that require RPC-only extras', async () => {
+    it('rejects native approvals with RPC-only extras after tmux retirement', async () => {
         const engine = {
             getSession: () => createNativeSession(),
-            nativeSessions: {
-                approvePermission: mock(async () => {})
-            },
             rpcGateway: {
                 approvePermission: mock(async () => {})
             }
@@ -83,31 +77,27 @@ describe('SyncEngine native permission routing', () => {
 
         await expect(
             SyncEngine.prototype.approvePermission.call(engine, 'session-native', 'req-1', 'acceptEdits')
-        ).rejects.toThrow('Native Codex approvals currently support decision-only responses')
+        ).rejects.toThrow('Native tmux sessions have been retired')
     })
 
-    it('routes native denials through the native session manager', async () => {
-        const denyNative = mock(async () => {})
+    it('rejects native denials after tmux retirement', async () => {
         const denyRpc = mock(async () => {})
         const nativeSession = createNativeSession()
         const engine = {
             getSession: () => nativeSession,
-            nativeSessions: {
-                denyPermission: denyNative
-            },
             rpcGateway: {
                 denyPermission: denyRpc
             }
         } as unknown as SyncEngine
 
-        await SyncEngine.prototype.denyPermission.call(engine, nativeSession.id, 'req-1', 'abort')
+        await expect(
+            SyncEngine.prototype.denyPermission.call(engine, nativeSession.id, 'req-1', 'abort')
+        ).rejects.toThrow('Native tmux sessions have been retired')
 
-        expect(denyNative).toHaveBeenCalledWith(nativeSession.id, 'req-1', 'abort')
         expect(denyRpc).not.toHaveBeenCalled()
     })
 
-    it('requests restart-capable native resumes for inactive native sessions', async () => {
-        const resumeNative = mock(async () => true)
+    it('rejects native resumes after tmux retirement', async () => {
         const nativeSession = {
             ...createNativeSession(),
             active: false,
@@ -119,43 +109,13 @@ describe('SyncEngine native permission routing', () => {
         const engine = {
             sessionCache: {
                 resolveSessionAccess: () => ({ ok: true, sessionId: nativeSession.id, session: nativeSession })
-            },
-            nativeSessions: {
-                resume: resumeNative
-            }
-        } as unknown as SyncEngine
-
-        await expect(SyncEngine.prototype.resumeSession.call(engine, nativeSession.id, 'default')).resolves.toEqual({
-            type: 'success',
-            sessionId: nativeSession.id
-        })
-        expect(resumeNative).toHaveBeenCalledWith(nativeSession.id, 'default', { allowRestart: true })
-    })
-
-    it('returns a structured native resume failure when tmux resume throws', async () => {
-        const nativeSession = {
-            ...createNativeSession(),
-            active: false,
-            metadata: {
-                ...createNativeSession().metadata,
-                codexSessionId: '019db6cc-6755-76f0-bd5d-074e3428b87f'
-            }
-        }
-        const engine = {
-            sessionCache: {
-                resolveSessionAccess: () => ({ ok: true, sessionId: nativeSession.id, session: nativeSession })
-            },
-            nativeSessions: {
-                resume: mock(async () => {
-                    throw new Error('Failed to create tmux session for native resume')
-                })
             }
         } as unknown as SyncEngine
 
         await expect(SyncEngine.prototype.resumeSession.call(engine, nativeSession.id, 'default')).resolves.toEqual({
             type: 'error',
-            message: 'Failed to create tmux session for native resume',
-            code: 'resume_failed'
+            message: 'Native tmux sessions have been retired',
+            code: 'resume_unavailable'
         })
     })
 })

@@ -1,54 +1,39 @@
 # HAPI
 
-在本地运行原生 Codex session，并通过 Web / PWA 在电脑和手机之间无缝切换。
+通过 Web / PWA 远程控制本机或自托管机器上的 Codex。
 
-当前这条分支主打 **原生 Codex session**：让 Codex 继续跑在你自己的终端 / `tmux` 里，再从手机打开同一个 session，PC 和手机之间来回切换，不重启 agent，也不丢上下文。
-
-> **支持范围**：当前公开支持仅限 **Codex**。Claude Code、Gemini 和其它 agent 相关代码不作为当前支持面；如果还在仓库里出现，视为历史实现或实验路径。
+当前公开支持范围仅限 **Codex app-server**。Claude Code、Gemini、OpenCode 和历史 native/tmux 代码不作为当前支持面；如果还在仓库里出现，视为历史实现或内部兼容代码。
 
 > **为什么是 HAPI？** HAPI 是 Happy 的 local-first 替代方案。核心差异见 [Why Not Happy?](docs/guide/why-hapi.md)。
 
 ## 特性
 
-- **同一个 Codex Session，两个设备无缝切换** - 在 PC 上用原生 Codex 终端工作，出门后从手机或浏览器接着看，再随时切回桌面端。
-- **原生 `tmux + codex` 工作流** - HAPI 附着到你真实运行的 Codex 进程，而不是用一个浏览器里的伪终端去替代它。
-- **创建 / 附着 / 恢复** - 可以直接在 Web 里创建原生 Codex session、附着已有 `tmux` pane，或者在 `tmux` / Codex 退出后按 session ID 恢复。
-- **离开工位也不断流** - 人不在电脑前时，也能直接从手机批准原生 Codex 的权限请求。
-- **自托管远程访问** - Codex 继续跑在你自己的机器上，通过 Cloudflare Tunnel、反向代理或 VPS relay 暴露 HAPI。
+- **Codex app-server 主路径** - thread 历史、生命周期动作、review、skills、plugins、apps、MCP、memory 都优先走 Codex 原生 app-server。
+- **Web / PWA 远控** - 手机或浏览器访问 HAPI，继续查看和操作远程 Codex session。
+- **自托管访问** - 通过 Cloudflare Tunnel、反向代理或 VPS relay 暴露 HAPI。
+- **集中式 Hub** - Hub 负责鉴权、会话列表、SSE 实时更新、Socket.IO RPC 和 SQLite 持久化。
 
-## 原生 Codex 工作流
+## 当前边界
 
-这一版的核心使用方式是：
-
-1. 在你自己的终端或 `tmux` 里运行 Codex，或者直接让 HAPI 为某个目录创建一个新的原生 Codex session。
-2. 在 PC 或手机上打开 HAPI Web / PWA。
-3. 附着这个原生 session，继续远程聊天、查看输出、批准命令。
-4. 回到 PC 上的终端，继续在同一个 Codex session 里工作。
-5. 如果 `tmux` pane 或 Codex 进程挂掉，HAPI 可以基于保存的 Codex session ID 恢复这个原生 session。
-
-当前范围：
-
-- 原生创建 / 附着 / 恢复目前只面向 `codex`
-- Claude Code、Gemini 和其它 agent 暂不支持
+- 支持：Codex remote session、Codex app-server thread/read/actions、review、workspace 展示、管理面板。
+- Codex history 可通过在线 runner 的 app-server catalog 读取；不要求已经存在一个打开的 HAPI session。
+- 不支持：native `tmux` create / attach / resume / open。
+- 旧 native/tmux session 已退役；相关 API 返回 `410 Gone`，旧 session URL 返回 not found。
 
 ## 快速开始
 
 ```bash
-./scripts/public-deploy.sh start
-tmux new -s work-a
-codex
+bun install
+bun run dev
 ```
 
-然后打开 HAPI Web，在 `Create Session` 里选择：
+生产部署：
 
-- `Create New Native Session`
-- `Attach Native Session`
+```bash
+./scripts/public-deploy.sh start
+```
 
-如果你要把这套工作流暴露到手机上，先看：
-
-- [安装说明](docs/guide/installation.md)
-- [公网 / Tunnel 部署](docs/guide/tunnel-deployment.md)
-- [VPS 中转部署](docs/guide/vps-relay-deployment.md)
+然后打开 HAPI Web，在 `New Session` 中选择在线 runner 机器并创建 Codex session。
 
 ## 文档
 

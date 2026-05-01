@@ -2,8 +2,7 @@ import { isSessionArchivedMetadata, toSessionSummary } from '@hapi/protocol'
 import { Hono } from 'hono'
 import { basename } from 'node:path'
 import { z } from 'zod'
-import { listNativeCodexSessionCatalog } from '../../native/codexSessionCatalog'
-import type { Session, SyncEngine } from '../../sync/syncEngine'
+import type { Machine, Session, SyncEngine } from '../../sync/syncEngine'
 import { normalizeFilesystemPath } from '../../utils/filesystemPath'
 import type { WebAppEnv } from '../middleware/auth'
 import { requireSyncEngine } from './guards'
@@ -14,13 +13,14 @@ const openCodexSessionSchema = z.object({
     title: z.string().trim().min(1).max(255).optional(),
     openStrategy: z.enum([
         'navigate-attached',
-        'open-app-server-thread',
-        'open-native-resume'
+        'open-app-server-thread'
     ]).optional()
 })
 
-type CodexOrigin = 'attached' | 'app-server-thread' | 'transcript-fallback'
-type CodexOpenStrategy = 'navigate-attached' | 'open-app-server-thread' | 'open-native-resume'
+type CodexOrigin = 'attached' | 'app-server-thread'
+type CodexOpenStrategy = 'navigate-attached' | 'open-app-server-thread'
+
+const nativeTmuxRetiredMessage = 'Native tmux resume has been retired. Open this Codex thread from an app-server-backed session.'
 
 function sortDisplaySessions(
     left: {
@@ -146,10 +146,12 @@ type CodexSessionListEntry = {
 type CodexSessionCandidate = CodexSessionListEntry & {
     sourceRank: number
     appServerSourceSessionId?: string
+    appServerSourceMachineId?: string
 }
 
 type AppServerOpenTarget = {
-    sourceSession: Session
+    sourceSession?: Session
+    machineId: string
     cwd: string
 }
 
@@ -182,8 +184,9 @@ function buildCodexSessionCandidate(options: {
     machineId?: string | null
     source?: NonNullable<Session['metadata']>['source']
     sourceRank: number
-    origin: Exclude<CodexOrigin, 'attached'>
+    origin: 'app-server-thread'
     appServerSourceSessionId?: string
+    appServerSourceMachineId?: string
 }): CodexSessionCandidate {
     const attachedSummary = options.attachedSession ? toSessionSummary(options.attachedSession) : null
     const rawPath = options.cwd.trim() || attachedSummary?.metadata?.path || options.cwd
@@ -203,9 +206,7 @@ function buildCodexSessionCandidate(options: {
         codexOrigin: attachedSummary ? 'attached' : options.origin,
         openStrategy: attachedSummary
             ? 'navigate-attached'
-            : options.origin === 'app-server-thread'
-                ? 'open-app-server-thread'
-                : 'open-native-resume',
+            : 'open-app-server-thread',
         active,
         thinking: attachedSummary?.thinking ?? false,
         activeAt,
@@ -231,7 +232,8 @@ function buildCodexSessionCandidate(options: {
         effort: attachedSummary?.effort ?? null,
         archived: Boolean(attachedSummary?.archived || options.archived),
         sourceRank: options.sourceRank,
-        appServerSourceSessionId: options.appServerSourceSessionId
+        appServerSourceSessionId: options.appServerSourceSessionId,
+        appServerSourceMachineId: options.appServerSourceMachineId
     }
 }
 
@@ -289,34 +291,31 @@ function listAttachedCodexSessionCandidates(sessions: Session[]): CodexSessionCa
             machineId: session.metadata.machineId,
             source: session.metadata.source,
             sourceRank: 0,
-            origin: 'transcript-fallback'
+            origin: 'app-server-thread'
         }))
 }
 
 async function listAppServerCodexSessionCandidates(
     engine: SyncEngine,
-    sessions: Session[]
+    sessions: Session[],
+    machines: Machine[]
 ): Promise<CodexSessionCandidate[]> {
-    if (typeof engine.listCodexThreads !== 'function') {
-        return []
-    }
-
     const remoteCodexSessions = sessions.filter(isRemoteCodexAppServerSession)
-    if (remoteCodexSessions.length === 0) {
+    const onlineMachines = machines.filter((machine) => machine.active)
+    if (remoteCodexSessions.length === 0 && onlineMachines.length === 0) {
         return []
     }
 
     const entries = new Map<string, CodexSessionCandidate>()
+    const requests = [
+        { archived: false as const },
+        { archived: true as const }
+    ]
 
     await Promise.all(remoteCodexSessions.map(async (session) => {
         const attachedSession = session.metadata?.codexSessionId
             ? pickAttachedSession(sessions, session.metadata.codexSessionId)
             : session
-
-        const requests = [
-            { archived: false as const },
-            { archived: true as const }
-        ]
 
         await Promise.all(requests.map(async ({ archived }) => {
             try {
@@ -338,7 +337,7 @@ async function listAppServerCodexSessionCandidates(
 
                     mergeCodexSessionCandidate(entries, buildCodexSessionCandidate({
                         codexSessionId,
-                        cwd: thread.path ?? thread.cwd ?? session.metadata?.path ?? '',
+                        cwd: thread.cwd ?? thread.path ?? session.metadata?.path ?? '',
                         attachedSession: threadAttachedSession,
                         preferredName: thread.name,
                         summaryText: thread.preview,
@@ -354,7 +353,52 @@ async function listAppServerCodexSessionCandidates(
                     }))
                 }
             } catch {
-                // Ignore unsupported / failed app-server listings and keep transcript fallback alive.
+                // Ignore unsupported / failed app-server listings; transcript/tmux fallback is retired.
+            }
+        }))
+    }))
+
+    await Promise.all(onlineMachines.map(async (machine) => {
+        if (typeof engine.listCodexThreadsFromMachine !== 'function') {
+            return
+        }
+
+        await Promise.all(requests.map(async ({ archived }) => {
+            try {
+                const result = await engine.listCodexThreadsFromMachine(machine.id, {
+                    archived,
+                    sortKey: 'updated_at',
+                    sortDirection: 'desc',
+                    limit: 200
+                })
+
+                for (const thread of result.data) {
+                    const codexSessionId = thread.id?.trim()
+                    if (!codexSessionId) {
+                        continue
+                    }
+
+                    const threadAttachedSession = pickAttachedSession(sessions, codexSessionId)
+                    const rawCwd = thread.cwd ?? thread.path ?? machine.metadata?.homeDir ?? ''
+
+                    mergeCodexSessionCandidate(entries, buildCodexSessionCandidate({
+                        codexSessionId,
+                        cwd: rawCwd,
+                        attachedSession: threadAttachedSession,
+                        preferredName: thread.name,
+                        summaryText: thread.preview,
+                        updatedAt: thread.updatedAt ?? thread.createdAt ?? machine.updatedAt,
+                        activeAt: machine.activeAt,
+                        active: isActiveThreadStatus(thread.status),
+                        archived,
+                        machineId: machine.id,
+                        sourceRank: 1,
+                        origin: 'app-server-thread',
+                        appServerSourceMachineId: machine.id
+                    }))
+                }
+            } catch {
+                // Keep Codex history available from other online machines or sessions.
             }
         }))
     }))
@@ -365,16 +409,16 @@ async function listAppServerCodexSessionCandidates(
 async function findAppServerOpenTarget(options: {
     engine: SyncEngine
     sessions: Session[]
+    machines: Machine[]
     codexSessionId: string
     cwd: string
 }): Promise<AppServerOpenTarget | null> {
-    if (typeof options.engine.listCodexThreads !== 'function') {
-        return null
-    }
-
     const requestedPath = normalizeFilesystemPath(options.cwd) ?? options.cwd
     const remoteCodexSessions = options.sessions.filter(isRemoteCodexAppServerSession)
     for (const session of remoteCodexSessions) {
+        if (typeof options.engine.listCodexThreads !== 'function') {
+            continue
+        }
         for (const archived of [false, true] as const) {
             try {
                 const result = await options.engine.listCodexThreads(session.id, {
@@ -388,14 +432,49 @@ async function findAppServerOpenTarget(options: {
                     continue
                 }
 
-                const rawCwd = thread.path ?? thread.cwd ?? session.metadata?.path ?? requestedPath
+                const rawCwd = thread.cwd ?? thread.path ?? session.metadata?.path ?? requestedPath
                 const cwd = normalizeFilesystemPath(rawCwd) ?? rawCwd
+                const machineId = session.metadata?.machineId
+                if (!machineId) {
+                    continue
+                }
                 return {
                     sourceSession: session,
+                    machineId,
                     cwd
                 }
             } catch {
                 // Keep checking other active app-server sessions.
+            }
+        }
+    }
+
+    const onlineMachines = options.machines.filter((machine) => machine.active)
+    for (const machine of onlineMachines) {
+        if (typeof options.engine.listCodexThreadsFromMachine !== 'function') {
+            continue
+        }
+        for (const archived of [false, true] as const) {
+            try {
+                const result = await options.engine.listCodexThreadsFromMachine(machine.id, {
+                    archived,
+                    sortKey: 'updated_at',
+                    sortDirection: 'desc',
+                    limit: 200
+                })
+                const thread = result.data.find((entry) => entry.id?.trim() === options.codexSessionId)
+                if (!thread) {
+                    continue
+                }
+
+                const rawCwd = thread.cwd ?? thread.path ?? machine.metadata?.homeDir ?? requestedPath
+                const cwd = normalizeFilesystemPath(rawCwd) ?? rawCwd
+                return {
+                    machineId: machine.id,
+                    cwd
+                }
+            } catch {
+                // Keep checking other active app-server machines.
             }
         }
     }
@@ -406,6 +485,7 @@ async function findAppServerOpenTarget(options: {
 async function openAppServerCodexThread(options: {
     engine: SyncEngine
     sessions: Session[]
+    machines: Machine[]
     codexSessionId: string
     cwd: string
 }): Promise<{ sessionId: string } | { error: string; status: 400 | 409 | 503 }> {
@@ -417,16 +497,12 @@ async function openAppServerCodexThread(options: {
     const target = await findAppServerOpenTarget({
         engine: options.engine,
         sessions: options.sessions,
+        machines: options.machines,
         codexSessionId: options.codexSessionId,
         cwd: options.cwd
     })
     if (!target) {
-        return { error: 'Codex app-server thread is not available from an online remote session', status: 409 }
-    }
-
-    const machineId = target.sourceSession.metadata?.machineId
-    if (!machineId) {
-        return { error: 'Codex app-server source machine is unavailable', status: 503 }
+        return { error: 'Codex app-server thread is not available from an online runner', status: 409 }
     }
 
     if (typeof options.engine.spawnSession !== 'function') {
@@ -434,21 +510,25 @@ async function openAppServerCodexThread(options: {
     }
 
     const spawnResult = await options.engine.spawnSession(
-        machineId,
+        target.machineId,
         target.cwd,
         'codex',
-        target.sourceSession.model ?? undefined,
-        target.sourceSession.modelReasoningEffort ?? undefined,
+        target.sourceSession?.model ?? undefined,
+        target.sourceSession?.modelReasoningEffort ?? undefined,
         undefined,
         undefined,
         undefined,
         options.codexSessionId,
-        target.sourceSession.effort ?? undefined,
-        target.sourceSession.permissionMode ?? undefined
+        target.sourceSession?.effort ?? undefined,
+        target.sourceSession?.permissionMode ?? undefined
     )
 
     if (spawnResult.type === 'error') {
         return { error: spawnResult.message, status: 409 }
+    }
+
+    if (typeof options.engine.setSessionCodexSessionId === 'function') {
+        options.engine.setSessionCodexSessionId(spawnResult.sessionId, options.codexSessionId)
     }
 
     return { sessionId: spawnResult.sessionId }
@@ -465,33 +545,26 @@ export function createCodexSessionsRoutes(getSyncEngine: () => SyncEngine | null
 
         const namespace = c.get('namespace')
         const sessions = engine.getSessionsByNamespace(namespace)
+        const machines = engine.getMachinesByNamespace(namespace)
         const entries = new Map<string, CodexSessionCandidate>()
 
         for (const candidate of listAttachedCodexSessionCandidates(sessions)) {
             mergeCodexSessionCandidate(entries, candidate)
         }
 
-        for (const candidate of await listAppServerCodexSessionCandidates(engine, sessions)) {
+        for (const candidate of await listAppServerCodexSessionCandidates(engine, sessions, machines)) {
             mergeCodexSessionCandidate(entries, candidate)
-        }
-
-        for (const entry of listNativeCodexSessionCatalog()) {
-            mergeCodexSessionCandidate(entries, buildCodexSessionCandidate({
-                codexSessionId: entry.codexSessionId,
-                cwd: entry.cwd,
-                attachedSession: pickAttachedSession(sessions, entry.codexSessionId),
-                summaryText: entry.recentUserMessages[entry.recentUserMessages.length - 1],
-                updatedAt: entry.updatedAt,
-                activeAt: entry.timestamp ?? entry.updatedAt,
-                sourceRank: 1,
-                origin: 'transcript-fallback'
-            }))
         }
 
         return c.json({
             sessions: Array.from(entries.values())
                 .sort(sortDisplaySessions)
-                .map(({ sourceRank: _sourceRank, appServerSourceSessionId: _appServerSourceSessionId, ...entry }) => entry)
+                .map(({
+                    sourceRank: _sourceRank,
+                    appServerSourceSessionId: _appServerSourceSessionId,
+                    appServerSourceMachineId: _appServerSourceMachineId,
+                    ...entry
+                }) => entry)
         })
     })
 
@@ -510,6 +583,7 @@ export function createCodexSessionsRoutes(getSyncEngine: () => SyncEngine | null
         try {
             const namespace = c.get('namespace')
             const sessions = engine.getSessionsByNamespace(namespace)
+            const machines = engine.getMachinesByNamespace(namespace)
             const attached = pickAttachedSession(sessions, parsed.data.codexSessionId)
             if (parsed.data.openStrategy === 'navigate-attached') {
                 if (!attached) {
@@ -521,6 +595,7 @@ export function createCodexSessionsRoutes(getSyncEngine: () => SyncEngine | null
             const appServerTarget = await findAppServerOpenTarget({
                 engine,
                 sessions,
+                machines,
                 codexSessionId: parsed.data.codexSessionId,
                 cwd: parsed.data.cwd
             })
@@ -531,6 +606,7 @@ export function createCodexSessionsRoutes(getSyncEngine: () => SyncEngine | null
                 const result = await openAppServerCodexThread({
                     engine,
                     sessions,
+                    machines,
                     codexSessionId: parsed.data.codexSessionId,
                     cwd: appServerTarget?.cwd ?? parsed.data.cwd
                 })
@@ -540,8 +616,7 @@ export function createCodexSessionsRoutes(getSyncEngine: () => SyncEngine | null
                 return c.json({ sessionId: result.sessionId })
             }
 
-            const session = await engine.openCodexSession(c.get('namespace'), parsed.data)
-            return c.json({ sessionId: session.id })
+            return c.json({ error: nativeTmuxRetiredMessage }, 409)
         } catch (error) {
             return c.json({
                 error: error instanceof Error ? error.message : 'Failed to open codex session'

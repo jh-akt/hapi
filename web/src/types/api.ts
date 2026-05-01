@@ -11,7 +11,10 @@ import type {
 export type {
     CodexAppServerMethod,
     CodexAppServerParams,
-    CodexAppServerResult
+    CodexAppServerResult,
+    Model as CodexModel,
+    ModelListParams as CodexModelListParams,
+    ModelListResponse as CodexModelListResponse
 } from '@hapi/protocol/codex-app-server'
 
 export type {
@@ -93,8 +96,8 @@ export type AuthResponse = {
 }
 
 export type SessionsResponse = { sessions: SessionSummary[] }
-export type CodexOrigin = 'attached' | 'app-server-thread' | 'transcript-fallback'
-export type CodexOpenStrategy = 'navigate-attached' | 'open-app-server-thread' | 'open-native-resume'
+export type CodexOrigin = 'attached' | 'app-server-thread'
+export type CodexOpenStrategy = 'navigate-attached' | 'open-app-server-thread'
 export type CodexSessionSummary = SessionSummary & {
     attachedSessionId: string | null
     listSource: 'codex-history'
@@ -281,7 +284,6 @@ export type ProjectSummary = {
 export type ProjectsResponse = { projects: ProjectSummary[] }
 export type CreateProjectResponse = {
     project: ProjectSummary
-    nativeSession: NativeSessionCandidate | null
 }
 export type MessagesResponse = {
     messages: DecryptedMessage[]
@@ -295,15 +297,7 @@ export type MessagesResponse = {
 
 export type MachinesResponse = { machines: Machine[] }
 export type MachinePathsExistsResponse = { exists: Record<string, boolean> }
-export type NativeSessionCandidate = {
-    tmuxSession: string
-    tmuxPane: string
-    cwd: string
-    command: 'codex'
-    sessionId?: string
-}
-export type NativeSessionsResponse = { sessions: NativeSessionCandidate[] }
-export type NativeSessionAttachResponse = { sessionId: string }
+export type SessionOpenResponse = { sessionId: string }
 
 export type SpawnResponse =
     | { type: 'success'; sessionId: string }

@@ -443,7 +443,44 @@ export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null): Ho
             return c.json({ error: 'Codex app-server method is not available from the web API' }, 403)
         }
 
+        const appServerFromMachine = async (): Promise<unknown | null> => {
+            const machineReadableMethod = method === 'thread/read' || method === 'thread/turns/list' || method === 'model/list'
+            if (!machineReadableMethod) {
+                return null
+            }
+            const machineId = sessionResult.session.metadata?.machineId
+            if (!machineId) {
+                return null
+            }
+            const namespace = c.get('namespace')
+            const machine = typeof engine.getMachineByNamespace === 'function'
+                ? engine.getMachineByNamespace(machineId, namespace)
+                : engine.getMachinesByNamespace(namespace).find((candidate) => candidate.id === machineId)
+            if (!machine?.active) {
+                return null
+            }
+            if (method === 'thread/read' && typeof engine.readCodexThreadFromMachine === 'function') {
+                return await engine.readCodexThreadFromMachine(
+                    machineId,
+                    params as CodexAppServerParams<'thread/read'>
+                )
+            }
+            if (typeof engine.codexAppServerFromMachine === 'function') {
+                return await engine.codexAppServerFromMachine(
+                    machineId,
+                    method as CodexAppServerMethod,
+                    params as CodexAppServerParams<CodexAppServerMethod>
+                )
+            }
+            return null
+        }
+
         try {
+            const machineResult = await appServerFromMachine()
+            if (machineResult !== null) {
+                return c.json(machineResult)
+            }
+
             const result = await engine.codexAppServer(
                 sessionResult.sessionId,
                 method as CodexAppServerMethod,
@@ -744,8 +781,14 @@ export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null): Ho
         }
 
         const flavor = sessionResult.session.metadata?.flavor ?? 'claude'
-        if (flavor !== 'claude' && flavor !== 'gemini') {
-            return c.json({ error: 'Model selection is only supported for Claude and Gemini sessions' }, 400)
+        if (flavor !== 'claude' && flavor !== 'gemini' && flavor !== 'codex') {
+            return c.json({ error: 'Model selection is only supported for Claude, Gemini, and remote Codex sessions' }, 400)
+        }
+        if (flavor === 'codex' && sessionResult.session.agentState?.controlledByUser === true) {
+            return c.json({ error: 'Model selection can only be changed for remote Codex sessions' }, 409)
+        }
+        if (flavor === 'codex' && sessionResult.session.metadata?.source === 'native-attached') {
+            return c.json({ error: 'Model selection can only be changed for remote Codex sessions' }, 409)
         }
 
         try {

@@ -403,6 +403,25 @@ export class RpcGateway {
         return await this.codexAppServerRpc(sessionId, 'thread/list', params) as RpcCodexThreadListResponse
     }
 
+    async listCodexThreadsFromMachine(machineId: string, params: RpcCodexThreadListParams = {}): Promise<RpcCodexThreadListResponse> {
+        return await this.machineCodexAppServerRpc(machineId, 'thread/list', params) as RpcCodexThreadListResponse
+    }
+
+    async readCodexThreadFromMachine(machineId: string, params: RpcCodexThreadReadParams): Promise<RpcCodexThreadReadResponse> {
+        return await this.machineCodexAppServerRpc(machineId, 'thread/read', params) as RpcCodexThreadReadResponse
+    }
+
+    async codexAppServerFromMachine<TMethod extends CodexAppServerMethod>(
+        machineId: string,
+        method: TMethod,
+        params: CodexAppServerParams<TMethod>
+    ): Promise<CodexAppServerResult<TMethod>> {
+        if (!isCodexAppServerMethod(method)) {
+            throw new Error(`Unsupported Codex app-server RPC method: ${method}`)
+        }
+        return await this.machineCodexAppServerRpc(machineId, method, params) as CodexAppServerResult<TMethod>
+    }
+
     async readCodexThread(sessionId: string, params: RpcCodexThreadReadParams): Promise<RpcCodexThreadReadResponse> {
         return await this.codexAppServerRpc(sessionId, 'thread/read', params) as RpcCodexThreadReadResponse
     }
@@ -452,6 +471,14 @@ export class RpcGateway {
         params: unknown
     ): Promise<unknown> {
         return await this.sessionRpc(sessionId, CODEX_APP_SERVER_RPC_METHOD, { method, params })
+    }
+
+    private async machineCodexAppServerRpc(
+        machineId: string,
+        method: CodexAppServerMethod,
+        params: unknown
+    ): Promise<unknown> {
+        return await this.machineRpc(machineId, CODEX_APP_SERVER_RPC_METHOD, { method, params })
     }
 
     private async machineRpc(machineId: string, method: string, params: unknown): Promise<unknown> {

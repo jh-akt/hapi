@@ -1,106 +1,35 @@
 import { describe, expect, it } from 'bun:test'
 import { Hono } from 'hono'
-import type { SyncEngine } from '../../sync/syncEngine'
 import type { WebAppEnv } from '../middleware/auth'
 import { createNativeSessionRoutes } from './nativeSessions'
 
-function createApp(engine: Partial<SyncEngine>) {
+function createApp() {
     const app = new Hono<WebAppEnv>()
     app.use('*', async (c, next) => {
         c.set('namespace', 'default')
         await next()
     })
-    app.route('/api', createNativeSessionRoutes(() => engine as SyncEngine))
+    app.route('/api', createNativeSessionRoutes())
     return app
 }
 
 describe('native session routes', () => {
-    it('returns discovered native sessions', async () => {
-        const app = createApp({
-            discoverNativeSessions: async () => ([
-                {
-                    tmuxSession: 'work-a',
-                    tmuxPane: '%3',
-                    cwd: '/tmp/project-a',
-                    command: 'codex',
-                    sessionId: 'session-1'
-                }
-            ])
-        })
+    it('returns gone for native tmux endpoints', async () => {
+        const app = createApp()
 
-        const response = await app.request('/api/native-sessions/discover')
+        const requests = [
+            app.request('/api/native-sessions/discover'),
+            app.request('/api/native-sessions/attach', { method: 'POST' }),
+            app.request('/api/native-sessions/create', { method: 'POST' }),
+            app.request('/api/native-sessions/session-1/detach', { method: 'POST' })
+        ]
+        const responses = await Promise.all(requests)
 
-        expect(response.status).toBe(200)
-        expect(await response.json()).toEqual({
-            sessions: [
-                {
-                    tmuxSession: 'work-a',
-                    tmuxPane: '%3',
-                    cwd: '/tmp/project-a',
-                    command: 'codex',
-                    sessionId: 'session-1'
-                }
-            ]
-        })
-    })
-
-    it('attaches a native session', async () => {
-        const app = createApp({
-            attachNativeSession: async () => ({
-                id: 'session-1'
-            } as Awaited<ReturnType<SyncEngine['attachNativeSession']>>)
-        })
-
-        const response = await app.request('/api/native-sessions/attach', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-                tmuxSession: 'work-a',
-                tmuxPane: '%3',
-                agent: 'codex',
-                title: 'project-a'
+        for (const response of responses) {
+            expect(response.status).toBe(410)
+            expect(await response.json()).toEqual({
+                error: 'Native tmux sessions have been retired'
             })
-        })
-
-        expect(response.status).toBe(200)
-        expect(await response.json()).toEqual({ sessionId: 'session-1' })
-    })
-
-    it('creates a native session', async () => {
-        const app = createApp({
-            createNativeSession: async () => ({
-                id: 'session-2'
-            } as Awaited<ReturnType<SyncEngine['createNativeSession']>>)
-        })
-
-        const response = await app.request('/api/native-sessions/create', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-                cwd: '/tmp/project-b',
-                agent: 'codex',
-                title: 'project-b'
-            })
-        })
-
-        expect(response.status).toBe(200)
-        expect(await response.json()).toEqual({ sessionId: 'session-2' })
-    })
-
-    it('rejects claude attach requests while native claude support is disabled', async () => {
-        const app = createApp({})
-
-        const response = await app.request('/api/native-sessions/attach', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-                tmuxSession: 'work-a',
-                tmuxPane: '%3',
-                agent: 'claude'
-            })
-        })
-
-        expect(response.status).toBe(400)
-        expect(await response.json()).toEqual({ error: 'Invalid body' })
+        }
     })
 })

@@ -55,6 +55,7 @@ type MachineRpcHandlers = {
     spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>
     stopSession: (sessionId: string) => boolean
     requestShutdown: () => void
+    codexAppServerRequest?: (payload: { method: string; params?: unknown }) => Promise<unknown>
 }
 
 interface PathExistsRequest {
@@ -101,7 +102,7 @@ export class ApiMachineClient {
         })
     }
 
-    setRPCHandlers({ spawnSession, stopSession, requestShutdown }: MachineRpcHandlers): void {
+    setRPCHandlers({ spawnSession, stopSession, requestShutdown, codexAppServerRequest }: MachineRpcHandlers): void {
         this.rpcHandlerManager.registerHandler('spawn-happy-session', async (params: any) => {
             const { directory, sessionId, resumeSessionId, machineId, approvedNewDirectoryCreation, agent, model, effort, modelReasoningEffort, yolo, permissionMode, token, sessionType, worktreeName } = params || {}
 
@@ -154,6 +155,20 @@ export class ApiMachineClient {
             setTimeout(() => requestShutdown(), 100)
             return { message: 'Runner stop request acknowledged' }
         })
+
+        if (codexAppServerRequest) {
+            this.rpcHandlerManager.registerHandler('codex-app-server', async (params: any) => {
+                const method = typeof params?.method === 'string' ? params.method : null
+                if (!method) {
+                    throw new Error('Codex app-server method is required')
+                }
+
+                return await codexAppServerRequest({
+                    method,
+                    params: params?.params
+                })
+            })
+        }
     }
 
     async updateMachineMetadata(handler: (metadata: MachineMetadata | null) => MachineMetadata): Promise<void> {

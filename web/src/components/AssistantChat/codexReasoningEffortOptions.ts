@@ -25,8 +25,14 @@ function formatCodexReasoningEffortLabel(effort: string): string {
         ?? `${effort.charAt(0).toUpperCase()}${effort.slice(1)}`
 }
 
-export function getCodexComposerReasoningEffortOptions(currentEffort?: string | null): CodexComposerReasoningEffortOption[] {
+export function getCodexComposerReasoningEffortOptions(
+    currentEffort?: string | null,
+    supportedEfforts?: string[] | null
+): CodexComposerReasoningEffortOption[] {
     const normalizedCurrentEffort = normalizeCodexComposerReasoningEffort(currentEffort)
+    const supported = supportedEfforts?.length
+        ? new Set(supportedEfforts.map((effort) => effort.trim().toLowerCase()).filter(Boolean))
+        : null
     const options: CodexComposerReasoningEffortOption[] = [
         { value: null, label: 'Default' }
     ]
@@ -41,10 +47,12 @@ export function getCodexComposerReasoningEffortOptions(currentEffort?: string | 
         })
     }
 
-    options.push(...CODEX_REASONING_EFFORT_PRESETS.map((effort) => ({
-        value: effort,
-        label: CODEX_REASONING_EFFORT_LABELS[effort]
-    })))
+    options.push(...CODEX_REASONING_EFFORT_PRESETS
+        .filter((effort) => !supported || supported.has(effort))
+        .map((effort) => ({
+            value: effort,
+            label: CODEX_REASONING_EFFORT_LABELS[effort]
+        })))
 
     return options
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isObject } from '@hapi/protocol'
 import type { ApiClient } from '@/api/client'
@@ -9,7 +9,7 @@ import { queryKeys } from '@/lib/query-keys'
 import { useToast } from '@/lib/toast-context'
 import { useTranslation } from '@/lib/use-translation'
 
-type PanelTab = 'summary' | 'review' | 'manage'
+export type CodexWorkspacePanelTab = 'messages' | 'summary' | 'review' | 'manage'
 
 type DetailRow = {
     label: string
@@ -28,13 +28,17 @@ type PluginRow = {
     remoteMarketplaceName: string | null
 }
 
-type ReviewRow = {
+type PanelRow = {
     id: string
     label: string
     title: string
     detail: string
     tone?: 'normal' | 'warning' | 'error'
 }
+
+type ReviewRow = PanelRow
+
+const REVIEW_VISIBLE_TURNS = 50
 
 function asString(value: unknown): string | null {
     return typeof value === 'string' && value.trim().length > 0 ? value : null
@@ -62,17 +66,6 @@ function formatTimestamp(value: unknown): string | null {
     }
     const millis = timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp
     return new Date(millis).toLocaleString()
-}
-
-function formatDuration(value: unknown): string | null {
-    const durationMs = asNumber(value)
-    if (!durationMs || durationMs <= 0) {
-        return null
-    }
-    if (durationMs < 1000) {
-        return `${Math.round(durationMs)}ms`
-    }
-    return `${(durationMs / 1000).toFixed(1)}s`
 }
 
 function shortText(value: unknown, max = 180): string {
@@ -138,7 +131,7 @@ function threadRows(thread: CodexThread | null, session: Session): DetailRow[] {
     return rows
 }
 
-function buildReviewRows(turns: CodexTurn[] | undefined): ReviewRow[] {
+export function buildReviewRows(turns: CodexTurn[] | undefined): ReviewRow[] {
     const rows: ReviewRow[] = []
     for (const turn of turns ?? []) {
         const items = Array.isArray(turn.items) ? turn.items : []
@@ -157,15 +150,6 @@ function buildReviewRows(turns: CodexTurn[] | undefined): ReviewRow[] {
                 })
                 continue
             }
-            if (type === 'agentMessage') {
-                rows.push({
-                    id,
-                    label: 'Finding',
-                    title: 'Review output',
-                    detail: shortText(item.text)
-                })
-                continue
-            }
             if (type === 'fileChange') {
                 const changes = Array.isArray(item.changes) ? item.changes : []
                 const paths = changes
@@ -179,33 +163,6 @@ function buildReviewRows(turns: CodexTurn[] | undefined): ReviewRow[] {
                     tone: item.status === 'failed' ? 'error' : 'normal'
                 })
                 continue
-            }
-            if (type === 'commandExecution') {
-                const exitCode = item.exitCode === null || item.exitCode === undefined ? '' : ` exit ${String(item.exitCode)}`
-                rows.push({
-                    id,
-                    label: 'Command',
-                    title: shortText(item.command, 80),
-                    detail: [asString(item.status), exitCode, formatDuration(item.durationMs)]
-                        .filter(Boolean)
-                        .join(' · '),
-                    tone: item.status === 'failed' ? 'error' : 'normal'
-                })
-                continue
-            }
-            if (type === 'mcpToolCall' || type === 'dynamicToolCall') {
-                const name = type === 'mcpToolCall'
-                    ? `${asString(item.server) ?? 'mcp'}.${asString(item.tool) ?? 'tool'}`
-                    : asString(item.tool) ?? 'tool'
-                rows.push({
-                    id,
-                    label: type === 'mcpToolCall' ? 'MCP' : 'Tool',
-                    title: name,
-                    detail: [asString(item.status), formatDuration(item.durationMs)]
-                        .filter(Boolean)
-                        .join(' · '),
-                    tone: item.status === 'failed' ? 'error' : 'normal'
-                })
             }
         }
     }
@@ -241,16 +198,44 @@ function EmptyLine(props: { message: string }) {
     return <div className="py-4 text-sm text-[var(--app-hint)]">{props.message}</div>
 }
 
+function PanelRows(props: { rows: PanelRow[] }) {
+    return (
+        <div className="space-y-2">
+            {props.rows.map((row) => (
+                <div key={row.id} className="border-b border-[var(--app-divider)] py-2 last:border-b-0">
+                    <div className="flex items-center gap-2">
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+                            row.tone === 'error'
+                                ? 'bg-[var(--app-badge-error-bg)] text-[var(--app-badge-error-text)]'
+                                : 'bg-[var(--app-subtle-bg)] text-[var(--app-hint)]'
+                        }`}>
+                            {row.label}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-[var(--app-fg)]">
+                            {row.title}
+                        </span>
+                    </div>
+                    <div className="mt-1 line-clamp-3 text-xs text-[var(--app-hint)]">
+                        {row.detail}
+                    </div>
+                </div>
+            ))}
+        </div>
+    )
+}
+
 export function CodexWorkspacePanel(props: {
     api: ApiClient
     session: Session
+    activeTab: CodexWorkspacePanelTab
+    onTabChange: (tab: CodexWorkspacePanelTab) => void
     reviewThreadId?: string | null
     onReviewThreadIdChange?: (threadId: string | null) => void
 }) {
     const { t } = useTranslation()
     const { addToast } = useToast()
     const queryClient = useQueryClient()
-    const [tab, setTab] = useState<PanelTab>('summary')
+    const tab = props.activeTab
 
     const canUseAppServerThread = canReadCodexThreadFromAppServer(props.session)
     const threadId = canUseAppServerThread && typeof props.session.metadata?.codexSessionId === 'string'
@@ -262,7 +247,7 @@ export function CodexWorkspacePanel(props: {
         queryKey: threadId ? queryKeys.codexThread(props.session.id, threadId) : ['codex-thread', 'workspace-panel-disabled'],
         queryFn: async () => await props.api.readCodexThread(props.session.id, {
             threadId: threadId ?? '',
-            includeTurns: true
+            includeTurns: false
         }),
         enabled: Boolean(threadId),
         staleTime: 3_000
@@ -288,9 +273,10 @@ export function CodexWorkspacePanel(props: {
             if (!effectiveReviewThreadId) {
                 throw new Error('Missing review thread id')
             }
-            return await props.api.readCodexThread(props.session.id, {
+            return await props.api.listCodexThreadTurns(props.session.id, {
                 threadId: effectiveReviewThreadId,
-                includeTurns: true
+                limit: REVIEW_VISIBLE_TURNS,
+                sortDirection: 'desc'
             })
         },
         enabled: tab === 'review' && Boolean(effectiveReviewThreadId),
@@ -430,10 +416,17 @@ export function CodexWorkspacePanel(props: {
 
     const thread = threadQuery.data?.thread ?? null
     const summaryRows = useMemo(() => threadRows(thread, props.session), [thread, props.session])
-    const visibleTurns = turnsQuery.data?.data ?? thread?.turns ?? []
+    const visibleTurns = useMemo(
+        () => turnsQuery.data?.data ? [...turnsQuery.data.data].reverse() : thread?.turns ?? [],
+        [thread?.turns, turnsQuery.data?.data]
+    )
+    const reviewTurns = useMemo(
+        () => reviewQuery.data?.data ? [...reviewQuery.data.data].reverse() : [],
+        [reviewQuery.data?.data]
+    )
     const reviewRows = useMemo(
-        () => buildReviewRows(reviewQuery.data?.thread.turns),
-        [reviewQuery.data?.thread.turns]
+        () => buildReviewRows(reviewTurns),
+        [reviewTurns]
     )
     const plugins = useMemo(() => flattenPlugins(pluginsQuery.data), [pluginsQuery.data])
     const skills = (skillsQuery.data?.data ?? []).flatMap((entry) => entry.skills.map((skill) => ({
@@ -449,7 +442,7 @@ export function CodexWorkspacePanel(props: {
         return null
     }
 
-    const tabClass = (value: PanelTab) => [
+    const tabClass = (value: CodexWorkspacePanelTab) => [
         'h-8 rounded-md px-3 text-xs font-semibold transition-colors',
         tab === value
             ? 'bg-[var(--app-button)] text-[var(--app-button-text)]'
@@ -460,13 +453,16 @@ export function CodexWorkspacePanel(props: {
         <section className="border-b border-[var(--app-border)] bg-[var(--app-bg)]">
             <div className="mx-auto w-full max-w-content px-3 py-3">
                 <div className="mb-3 flex items-center gap-2 overflow-x-auto">
-                    <button type="button" className={tabClass('summary')} onClick={() => setTab('summary')}>
+                    <button type="button" className={tabClass('messages')} onClick={() => props.onTabChange('messages')}>
+                        {t('codexPanel.tab.messages')}
+                    </button>
+                    <button type="button" className={tabClass('summary')} onClick={() => props.onTabChange('summary')}>
                         {t('codexPanel.tab.summary')}
                     </button>
-                    <button type="button" className={tabClass('review')} onClick={() => setTab('review')}>
+                    <button type="button" className={tabClass('review')} onClick={() => props.onTabChange('review')}>
                         {t('codexPanel.tab.review')}
                     </button>
-                    <button type="button" className={tabClass('manage')} onClick={() => setTab('manage')}>
+                    <button type="button" className={tabClass('manage')} onClick={() => props.onTabChange('manage')}>
                         {t('codexPanel.tab.manage')}
                     </button>
                 </div>
@@ -520,27 +516,7 @@ export function CodexWorkspacePanel(props: {
                         {reviewQuery.isLoading ? (
                             <EmptyLine message={t('loading')} />
                         ) : reviewRows.length > 0 ? (
-                            <div className="space-y-2">
-                                {reviewRows.map((row) => (
-                                    <div key={row.id} className="border-b border-[var(--app-divider)] py-2 last:border-b-0">
-                                        <div className="flex items-center gap-2">
-                                            <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
-                                                row.tone === 'error'
-                                                    ? 'bg-[var(--app-badge-error-bg)] text-[var(--app-badge-error-text)]'
-                                                    : 'bg-[var(--app-subtle-bg)] text-[var(--app-hint)]'
-                                            }`}>
-                                                {row.label}
-                                            </span>
-                                            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-[var(--app-fg)]">
-                                                {row.title}
-                                            </span>
-                                        </div>
-                                        <div className="mt-1 line-clamp-3 text-xs text-[var(--app-hint)]">
-                                            {row.detail}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
+                            <PanelRows rows={reviewRows} />
                         ) : effectiveReviewThreadId ? (
                             <EmptyLine message={t('codexPanel.review.noRows')} />
                         ) : null}

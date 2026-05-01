@@ -3,11 +3,14 @@ import type { Session } from '@/types/api'
 import type { ApiClient } from '@/api/client'
 import { isTelegramApp } from '@/hooks/useTelegram'
 import { useSessionActions } from '@/hooks/mutations/useSessionActions'
+import { useCodexModels } from '@/hooks/queries/useCodexModels'
 import { SessionActionMenu } from '@/components/SessionActionMenu'
 import { RenameSessionDialog } from '@/components/RenameSessionDialog'
+import { SessionModelDialog } from '@/components/SessionModelDialog'
 import { RollbackThreadDialog } from '@/components/RollbackThreadDialog'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
-import { getSessionModelLabel } from '@/lib/sessionModelLabel'
+import { getModelOptionsForFlavor } from '@/components/AssistantChat/modelOptions'
+import { getSessionModelLabel, getSessionModelReasoningEffortLabel } from '@/lib/sessionModelLabel'
 import { useTranslation } from '@/lib/use-translation'
 import { usePlatform } from '@/hooks/usePlatform'
 import { useToast } from '@/lib/toast-context'
@@ -78,18 +81,42 @@ export function SessionHeader(props: {
     const title = useMemo(() => getSessionTitle(session), [session])
     const worktreeBranch = session.metadata?.worktree?.branch
     const modelLabel = getSessionModelLabel(session)
+    const modelReasoningEffortLabel = getSessionModelReasoningEffortLabel(session)
     const isNativeSession = session.metadata?.source === 'native-attached'
     const isArchivedSession = Boolean(session.metadata?.archivedAt ?? session.metadata?.archivedBy ?? session.metadata?.archiveReason)
     const codexThreadId = session.metadata?.codexSessionId?.trim() || null
     const codexThreadLifecycleSupported = session.metadata?.flavor === 'codex'
         && !isNativeSession
         && Boolean(codexThreadId)
+    const agentFlavor = session.metadata?.flavor ?? null
+    const controlledByUser = session.agentState?.controlledByUser === true
+    const codexRemoteConfigSupported = agentFlavor === 'codex'
+        && session.active
+        && !isNativeSession
+        && !controlledByUser
+    const staticModelOptions = getModelOptionsForFlavor(agentFlavor, session.model)
+    const codexModels = useCodexModels(api, session.id, session.model, codexRemoteConfigSupported)
+    const modelOptions = agentFlavor === 'codex' && codexModels.modelOptions.length > 1
+        ? codexModels.modelOptions
+        : staticModelOptions
+    const modelSelectionSupported = session.active
+        && !isNativeSession
+        && modelOptions.length > 0
+        && (agentFlavor !== 'codex' || !controlledByUser)
+    const modelUnavailableReason = !modelSelectionSupported && modelOptions.length > 0
+        ? isNativeSession || controlledByUser
+            ? t('session.action.modelUnavailable.native')
+            : !session.active
+                ? t('session.action.modelUnavailable.offline')
+                : t('session.action.modelUnavailable.unsupported')
+        : undefined
 
     const [menuOpen, setMenuOpen] = useState(false)
     const [menuAnchorPoint, setMenuAnchorPoint] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
     const menuId = useId()
     const menuAnchorRef = useRef<HTMLButtonElement | null>(null)
     const [renameOpen, setRenameOpen] = useState(false)
+    const [modelOpen, setModelOpen] = useState(false)
     const [archiveOpen, setArchiveOpen] = useState(false)
     const [unarchiveOpen, setUnarchiveOpen] = useState(false)
     const [rollbackOpen, setRollbackOpen] = useState(false)
@@ -102,14 +129,16 @@ export function SessionHeader(props: {
         forkSession,
         rollbackCodexThread,
         compactCodexThread,
+        setModel,
+        setModelReasoningEffort,
         renameSession,
         deleteSession,
         isPending
     } = useSessionActions(
         api,
         session.id,
-        session.metadata?.flavor ?? null,
-        undefined,
+        agentFlavor,
+        codexRemoteConfigSupported,
         codexThreadLifecycleSupported
             ? {
                 codexThreadId,
@@ -139,6 +168,16 @@ export function SessionHeader(props: {
     const handleArchive = async () => {
         await archiveSession()
         props.onBack()
+    }
+
+    const handleModelChange = async (model: string | null) => {
+        await setModel(model)
+        haptic.notification('success')
+    }
+
+    const handleModelReasoningEffortChange = async (modelReasoningEffort: string | null) => {
+        await setModelReasoningEffort(modelReasoningEffort)
+        haptic.notification('success')
     }
 
     const handleDelete = async () => {
@@ -205,6 +244,11 @@ export function SessionHeader(props: {
                                     {t(modelLabel.key)}: {modelLabel.value}
                                 </span>
                             ) : null}
+                            {modelReasoningEffortLabel ? (
+                                <span>
+                                    {t(modelReasoningEffortLabel.key)}: {modelReasoningEffortLabel.value}
+                                </span>
+                            ) : null}
                             {worktreeBranch ? (
                                 <span>{t('session.item.worktree')}: {worktreeBranch}</span>
                             ) : null}
@@ -245,6 +289,8 @@ export function SessionHeader(props: {
                 onFork={session.metadata?.path ? handleFork : undefined}
                 onRollback={codexThreadLifecycleSupported && !isArchivedSession ? () => setRollbackOpen(true) : undefined}
                 onCompact={codexThreadLifecycleSupported && !isArchivedSession ? () => setCompactOpen(true) : undefined}
+                onModel={modelSelectionSupported ? () => setModelOpen(true) : undefined}
+                modelUnavailableReason={modelUnavailableReason}
                 onRename={() => setRenameOpen(true)}
                 onArchive={isArchivedSession ? undefined : () => setArchiveOpen(true)}
                 onUnarchive={codexThreadLifecycleSupported && isArchivedSession ? () => setUnarchiveOpen(true) : undefined}
@@ -258,6 +304,23 @@ export function SessionHeader(props: {
                 onClose={() => setRenameOpen(false)}
                 currentName={title}
                 onRename={renameSession}
+                isPending={isPending}
+            />
+
+            <SessionModelDialog
+                isOpen={modelOpen}
+                onClose={() => setModelOpen(false)}
+                agentFlavor={agentFlavor}
+                currentModel={session.model}
+                currentModelReasoningEffort={session.modelReasoningEffort}
+                modelOptions={modelOptions}
+                codexModels={agentFlavor === 'codex' ? codexModels.models : undefined}
+                onModelChange={handleModelChange}
+                onModelReasoningEffortChange={
+                    codexRemoteConfigSupported
+                        ? handleModelReasoningEffortChange
+                        : undefined
+                }
                 isPending={isPending}
             />
 

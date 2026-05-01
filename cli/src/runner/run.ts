@@ -23,6 +23,8 @@ import { createWorktree, removeWorktree, type WorktreeInfo } from './worktree';
 import { join } from 'path';
 import { buildMachineMetadata } from '@/agent/sessionFactory';
 import { hashRunnerCliApiToken } from './runnerIdentity';
+import { CodexAppServerClient } from '@/codex/codexAppServerClient';
+import { isCodexAppServerMethod, type CodexAppServerMethod, type CodexAppServerParams } from '@hapi/protocol/codex-app-server';
 
 export async function startRunner(): Promise<void> {
   // We don't have cleanup function at the time of server construction
@@ -644,12 +646,85 @@ export async function startRunner(): Promise<void> {
 
     // Create realtime machine session
     const apiMachine = api.machineSyncClient(machine);
+    let machineCodexClient: CodexAppServerClient | null = null;
+    let machineCodexClientInitialized = false;
+    let machineCodexClientInitializePromise: Promise<void> | null = null;
+    const machineCodexAppServerMethods = new Set<CodexAppServerMethod>([
+      'thread/list',
+      'thread/read',
+      'thread/turns/list',
+      'model/list'
+    ]);
+    const getMachineCodexClient = async (): Promise<CodexAppServerClient> => {
+      if (!machineCodexClient) {
+        machineCodexClient = new CodexAppServerClient();
+      }
+      await machineCodexClient.connect();
+      if (!machineCodexClientInitialized) {
+        machineCodexClientInitializePromise ??= machineCodexClient.initialize({
+          clientInfo: {
+            name: 'hapi-runner-codex-catalog',
+            title: 'HAPI Runner Codex Catalog',
+            version: packageJson.version
+          },
+          capabilities: {
+            experimentalApi: true
+          }
+        }).then(() => {
+          machineCodexClientInitialized = true;
+        }).finally(() => {
+          machineCodexClientInitializePromise = null;
+        });
+        await machineCodexClientInitializePromise;
+      }
+      return machineCodexClient;
+    };
+    const requestWithFreshMachineCodexClient = async (
+      method: CodexAppServerMethod,
+      params: unknown
+    ): Promise<unknown> => {
+      const client = new CodexAppServerClient();
+      try {
+        await client.connect();
+        await client.initialize({
+          clientInfo: {
+            name: 'hapi-runner-codex-read',
+            title: 'HAPI Runner Codex Read',
+            version: packageJson.version
+          },
+          capabilities: {
+            experimentalApi: true
+          }
+        });
+        return await client.request(
+          method,
+          (params ?? {}) as CodexAppServerParams<typeof method>,
+          { timeoutMs: 30_000 }
+        );
+      } finally {
+        await client.disconnect();
+      }
+    };
 
     // Set RPC handlers
     apiMachine.setRPCHandlers({
       spawnSession,
       stopSession,
-      requestShutdown: () => requestShutdown('hapi-app')
+      requestShutdown: () => requestShutdown('hapi-app'),
+      codexAppServerRequest: async ({ method, params }) => {
+        if (!isCodexAppServerMethod(method) || !machineCodexAppServerMethods.has(method)) {
+          throw new Error('Unsupported machine Codex app-server RPC method');
+        }
+        if (method === 'thread/read') {
+          return await requestWithFreshMachineCodexClient(method, params);
+        }
+        const client = await getMachineCodexClient();
+        return await client.request(
+          method,
+          (params ?? {}) as CodexAppServerParams<typeof method>,
+          { timeoutMs: 30_000 }
+        );
+      }
     });
 
     // Connect to server
@@ -804,6 +879,11 @@ export async function startRunner(): Promise<void> {
       await new Promise(resolve => setTimeout(resolve, 100));
 
       apiMachine.shutdown();
+      if (machineCodexClient) {
+        await machineCodexClient.disconnect().catch((error) => {
+          logger.debug('[RUNNER RUN] Failed to disconnect machine Codex app-server client', error);
+        });
+      }
       await stopControlServer();
       await cleanupRunnerState();
       await releaseRunnerLock(runnerLockHandle);

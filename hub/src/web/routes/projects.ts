@@ -10,14 +10,6 @@ const createProjectSchema = z.object({
     name: z.string().trim().min(1).max(255).optional()
 })
 
-function getProjectPath(path: string | undefined): string | null {
-    if (!path) {
-        return null
-    }
-    const normalized = normalizeFilesystemPath(path)
-    return normalized.length > 0 ? normalized : null
-}
-
 export function createProjectsRoutes(getSyncEngine: () => SyncEngine | null): Hono<WebAppEnv> {
     const app = new Hono<WebAppEnv>()
 
@@ -54,23 +46,7 @@ export function createProjectsRoutes(getSyncEngine: () => SyncEngine | null): Ho
             name: parsed.data.name
         })
 
-        const nativeSessions = await engine.discoverNativeSessions(namespace)
-        const nativeSession = nativeSessions
-            .filter((session) => getProjectPath(session.cwd) === path)
-            .sort((a, b) => {
-                if (Boolean(a.sessionId) !== Boolean(b.sessionId)) {
-                    return a.sessionId ? -1 : 1
-                }
-                if (a.tmuxSession !== b.tmuxSession) {
-                    return a.tmuxSession.localeCompare(b.tmuxSession)
-                }
-                return a.tmuxPane.localeCompare(b.tmuxPane)
-            })[0] ?? null
-
-        return c.json({
-            project,
-            nativeSession
-        })
+        return c.json({ project })
     })
 
     return app

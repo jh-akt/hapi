@@ -3,6 +3,13 @@ import type { ApiClient } from '@/api/client'
 import type { Session } from '@/types/api'
 import { queryKeys } from '@/lib/query-keys'
 
+export function isSessionMissingErrorMessage(message: string): boolean {
+    return message.includes('HTTP 404')
+        || message.includes('HTTP 403')
+        || message.includes('Session not found')
+        || message.includes('Session access denied')
+}
+
 export function useSession(api: ApiClient | null, sessionId: string | null): {
     session: Session | null
     isLoading: boolean
@@ -20,7 +27,7 @@ export function useSession(api: ApiClient | null, sessionId: string | null): {
         },
         enabled: Boolean(api && sessionId),
         retry: (failureCount, error) => {
-            if (error instanceof Error && (error.message.includes('HTTP 404') || error.message.includes('Session not found'))) {
+            if (error instanceof Error && isSessionMissingErrorMessage(error.message)) {
                 return false
             }
             return failureCount < 2

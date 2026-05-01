@@ -16,6 +16,8 @@ type SessionActionMenuProps = {
     onFork?: () => void
     onRollback?: () => void
     onCompact?: () => void
+    onModel?: () => void
+    modelUnavailableReason?: string
     onRename: () => void
     onArchive?: () => void
     onUnarchive?: () => void
@@ -40,6 +42,26 @@ function EditIcon(props: { className?: string }) {
         >
             <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
             <path d="m15 5 4 4" />
+        </svg>
+    )
+}
+
+function ModelIcon(props: { className?: string }) {
+    return (
+        <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={props.className}
+        >
+            <path d="M12 2v20" />
+            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7H14a3.5 3.5 0 0 1 0 7H6" />
         </svg>
     )
 }
@@ -172,6 +194,8 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
         onFork,
         onRollback,
         onCompact,
+        onModel,
+        modelUnavailableReason,
         onRename,
         onArchive,
         onUnarchive,
@@ -203,6 +227,11 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
     const handleCompact = () => {
         onClose()
         onCompact?.()
+    }
+
+    const handleModel = () => {
+        onClose()
+        onModel?.()
     }
 
     const handleArchive = () => {
@@ -311,7 +340,7 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
     return (
         <div
             ref={menuRef}
-            className="fixed z-50 min-w-[200px] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-lg animate-menu-pop"
+            className="fixed z-50 min-w-[220px] max-w-[min(320px,calc(100vw-16px))] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-lg animate-menu-pop"
             style={menuStyle}
         >
             <div
@@ -335,6 +364,34 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
                     <EditIcon className="text-[var(--app-hint)]" />
                     {t('session.action.rename')}
                 </button>
+
+                {onModel ? (
+                    <button
+                        type="button"
+                        role="menuitem"
+                        className={`${baseItemClassName} hover:bg-[var(--app-subtle-bg)]`}
+                        onClick={handleModel}
+                    >
+                        <ModelIcon className="text-[var(--app-hint)]" />
+                        {t('session.action.model')}
+                    </button>
+                ) : modelUnavailableReason ? (
+                    <button
+                        type="button"
+                        role="menuitem"
+                        disabled
+                        title={modelUnavailableReason}
+                        className={`${baseItemClassName} cursor-not-allowed opacity-55`}
+                    >
+                        <ModelIcon className="shrink-0 text-[var(--app-hint)]" />
+                        <span className="flex min-w-0 flex-col gap-0.5">
+                            <span>{t('session.action.model')}</span>
+                            <span className="text-xs leading-snug text-[var(--app-hint)]">
+                                {modelUnavailableReason}
+                            </span>
+                        </span>
+                    </button>
+                ) : null}
 
                 {onFork ? (
                     <button

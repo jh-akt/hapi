@@ -329,7 +329,7 @@ describe('session model', () => {
         }
     })
 
-    it('forks native sessions by creating a new native tmux session in the requested directory', async () => {
+    it('rejects native session fork after tmux retirement', async () => {
         const store = new Store(':memory:')
         const engine = new SyncEngine(
             store,
@@ -357,19 +357,13 @@ describe('session model', () => {
                 'default'
             )
 
-            let capturedNamespace: string | undefined
-            let capturedCwd: string | undefined
-            ;(engine as any).nativeSessions.create = async (options: { namespace: string; cwd: string }) => {
-                capturedNamespace = options.namespace
-                capturedCwd = options.cwd
-                return { id: 'session-native-forked' }
-            }
-
             const result = await engine.forkSession(session.id, 'default', { directory: '/tmp/project/subdir' })
 
-            expect(result).toEqual({ type: 'success', sessionId: 'session-native-forked' })
-            expect(capturedNamespace).toBe('default')
-            expect(capturedCwd).toBe('/tmp/project/subdir')
+            expect(result).toEqual({
+                type: 'error',
+                message: 'Native tmux sessions have been retired',
+                code: 'fork_unavailable'
+            })
         } finally {
             engine.stop()
         }
@@ -469,6 +463,40 @@ describe('session model', () => {
         expect(restored?.metadata?.archivedBy).toBeUndefined()
         expect(restored?.metadata?.archiveReason).toBeUndefined()
         expect(toSessionSummary(restored!).archived).toBe(false)
+    })
+
+    it('hides retired native tmux sessions from normal session access', () => {
+        const store = new Store(':memory:')
+        const events: SyncEvent[] = []
+        const cache = new SessionCache(store, createPublisher(events))
+
+        const retired = cache.getOrCreateSession(
+            'retired-native-session',
+            {
+                path: '/tmp/project',
+                host: 'localhost',
+                flavor: 'codex',
+                source: 'native-attached',
+                archiveReason: 'retired-native-tmux-session'
+            },
+            null,
+            'retired-native-tmux'
+        )
+        const otherNamespace = cache.getOrCreateSession(
+            'other-namespace-session',
+            { path: '/tmp/project', host: 'localhost', flavor: 'codex' },
+            null,
+            'other'
+        )
+
+        expect(cache.resolveSessionAccess(retired.id, 'default')).toEqual({
+            ok: false,
+            reason: 'not-found'
+        })
+        expect(cache.resolveSessionAccess(otherNamespace.id, 'default')).toEqual({
+            ok: false,
+            reason: 'access-denied'
+        })
     })
 
     it('passes the stored model reasoning effort when respawning a resumed Codex session', async () => {

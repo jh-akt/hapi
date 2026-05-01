@@ -788,6 +788,7 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     );
 
                 case 'skills/list':
+                case 'model/list':
                 case 'plugin/list':
                 case 'plugin/read':
                 case 'plugin/install':

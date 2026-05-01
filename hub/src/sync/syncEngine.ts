@@ -18,8 +18,6 @@ import type { Server } from 'socket.io'
 import type { Store } from '../store'
 import type { RpcRegistry } from '../socket/rpcRegistry'
 import type { SSEManager } from '../sse/sseManager'
-import { NativeSessionManager, type NativeSessionDiscoverItem } from '../native/sessionManager'
-import type { NativeLeadershipOptions } from '../native/leadership'
 import { EventPublisher, type SyncEventListener } from './eventPublisher'
 import { MachineCache, type Machine } from './machineCache'
 import { MessageService } from './messageService'
@@ -93,9 +91,7 @@ export type ProjectRecord = {
     updatedAt: number
 }
 
-export type SyncEngineOptions = {
-    nativeLeadership?: NativeLeadershipOptions
-}
+const nativeTmuxRetiredMessage = 'Native tmux sessions have been retired'
 
 export class SyncEngine {
     private readonly store: Store
@@ -104,15 +100,13 @@ export class SyncEngine {
     private readonly machineCache: MachineCache
     private readonly messageService: MessageService
     private readonly rpcGateway: RpcGateway
-    private readonly nativeSessions: NativeSessionManager
     private inactivityTimer: NodeJS.Timeout | null = null
 
     constructor(
         store: Store,
         io: Server,
         rpcRegistry: RpcRegistry,
-        sseManager: SSEManager,
-        options: SyncEngineOptions = {}
+        sseManager: SSEManager
     ) {
         this.store = store
         this.eventPublisher = new EventPublisher(sseManager, (event) => this.resolveNamespace(event))
@@ -121,20 +115,6 @@ export class SyncEngine {
         this.messageService = new MessageService(store, io, this.eventPublisher)
         this.rpcGateway = new RpcGateway(io, rpcRegistry)
         this.reloadAll()
-        this.nativeSessions = new NativeSessionManager({
-            getSessions: () => this.sessionCache.getSessions(),
-            getSessionsByNamespace: (namespace) => this.sessionCache.getSessionsByNamespace(namespace),
-            getSession: (sessionId) => this.getSession(sessionId),
-            getSessionByNamespace: (sessionId, namespace) => this.getSessionByNamespace(sessionId, namespace),
-            reloadState: () => this.reloadAll(),
-            getOrCreateSession: (...args) => this.sessionCache.getOrCreateSession(...args),
-            updateSessionMetadata: (sessionId, metadata, options) => this.sessionCache.updateSessionMetadata(sessionId, metadata, options),
-            updateSessionAgentState: (sessionId, agentState) => this.sessionCache.updateSessionAgentState(sessionId, agentState),
-            appendMessage: (sessionId, content, localId) => this.messageService.appendMessage(sessionId, content, localId),
-            getMessageCount: (sessionId) => this.store.messages.getMessages(sessionId, 1).length,
-            handleSessionAlive: (payload) => this.handleSessionAlive(payload),
-            handleSessionEnd: (payload) => this.handleSessionEnd(payload)
-        }, options.nativeLeadership)
         this.inactivityTimer = setInterval(() => this.expireInactive(), 5_000)
     }
 
@@ -143,7 +123,6 @@ export class SyncEngine {
             clearInterval(this.inactivityTimer)
             this.inactivityTimer = null
         }
-        this.nativeSessions.stop()
     }
 
     subscribe(listener: SyncEventListener): () => void {
@@ -209,64 +188,6 @@ export class SyncEngine {
 
     getMachinesByNamespace(namespace: string): Machine[] {
         return this.machineCache.getMachinesByNamespace(namespace)
-    }
-
-    async discoverNativeSessions(namespace: string): Promise<NativeSessionDiscoverItem[]> {
-        return await this.nativeSessions.discover(namespace)
-    }
-
-    async attachNativeSession(
-        namespace: string,
-        payload: {
-            tmuxSession: string
-            tmuxPane: string
-            agent?: 'codex'
-            title?: string
-        }
-    ): Promise<Session> {
-        return await this.nativeSessions.attach({
-            namespace,
-            tmuxSession: payload.tmuxSession,
-            tmuxPane: payload.tmuxPane,
-            agent: payload.agent,
-            title: payload.title
-        })
-    }
-
-    async createNativeSession(
-        namespace: string,
-        payload: {
-            cwd: string
-            agent?: 'codex'
-            title?: string
-        }
-    ): Promise<Session> {
-        return await this.nativeSessions.create({
-            namespace,
-            cwd: payload.cwd,
-            agent: payload.agent,
-            title: payload.title
-        })
-    }
-
-    async detachNativeSession(sessionId: string, namespace: string): Promise<void> {
-        await this.nativeSessions.detach(sessionId, namespace)
-    }
-
-    async openCodexSession(
-        namespace: string,
-        payload: {
-            cwd: string
-            codexSessionId: string
-            title?: string
-        }
-    ): Promise<Session> {
-        return await this.nativeSessions.openCodexSession({
-            namespace,
-            cwd: payload.cwd,
-            codexSessionId: payload.codexSessionId,
-            title: payload.title
-        })
     }
 
     getMachine(machineId: string): Machine | undefined {
@@ -413,15 +334,7 @@ export class SyncEngine {
     ): Promise<void> {
         const session = this.getSession(sessionId)
         if (session?.metadata?.source === 'native-attached') {
-            if (payload.attachments && payload.attachments.length > 0) {
-                throw new Error('Native sessions do not support attachments yet')
-            }
-            await this.nativeSessions.sendInput(sessionId, {
-                text: payload.text,
-                localId: payload.localId,
-                sentFrom: payload.sentFrom
-            })
-            return
+            throw new Error(nativeTmuxRetiredMessage)
         }
 
         await this.messageService.sendMessage(sessionId, payload)
@@ -437,11 +350,7 @@ export class SyncEngine {
     ): Promise<void> {
         const session = this.getSession(sessionId)
         if (session?.metadata?.source === 'native-attached') {
-            if (mode !== undefined || allowTools !== undefined || answers !== undefined) {
-                throw new Error('Native Codex approvals currently support decision-only responses')
-            }
-            await this.nativeSessions.approvePermission(sessionId, requestId, decision)
-            return
+            throw new Error(nativeTmuxRetiredMessage)
         }
 
         await this.rpcGateway.approvePermission(sessionId, requestId, mode, allowTools, decision, answers)
@@ -454,8 +363,7 @@ export class SyncEngine {
     ): Promise<void> {
         const session = this.getSession(sessionId)
         if (session?.metadata?.source === 'native-attached') {
-            await this.nativeSessions.denyPermission(sessionId, requestId, decision)
-            return
+            throw new Error(nativeTmuxRetiredMessage)
         }
 
         await this.rpcGateway.denyPermission(sessionId, requestId, decision)
@@ -464,8 +372,7 @@ export class SyncEngine {
     async abortSession(sessionId: string): Promise<void> {
         const session = this.getSession(sessionId)
         if (session?.metadata?.source === 'native-attached') {
-            await this.nativeSessions.interrupt(sessionId)
-            return
+            throw new Error(nativeTmuxRetiredMessage)
         }
 
         await this.rpcGateway.abortSession(sessionId)
@@ -478,9 +385,6 @@ export class SyncEngine {
         }
 
         if (session.metadata?.source === 'native-attached') {
-            if (session.metadata.native?.attached !== false) {
-                await this.nativeSessions.detach(sessionId, session.namespace)
-            }
             this.markSessionArchived(sessionId)
             return
         }
@@ -517,21 +421,7 @@ export class SyncEngine {
         }
 
         if (metadata.source === 'native-attached') {
-            try {
-                const forked = await this.nativeSessions.create({
-                    namespace,
-                    cwd: directory,
-                    agent: 'codex'
-                })
-
-                return { type: 'success', sessionId: forked.id }
-            } catch (error) {
-                return {
-                    type: 'error',
-                    message: error instanceof Error ? error.message : 'Failed to fork native session',
-                    code: 'fork_failed'
-                }
-            }
+            return { type: 'error', message: nativeTmuxRetiredMessage, code: 'fork_unavailable' }
         }
 
         const onlineMachines = this.machineCache.getOnlineMachinesByNamespace(namespace)
@@ -609,6 +499,23 @@ export class SyncEngine {
 
     async renameSession(sessionId: string, name: string): Promise<void> {
         await this.sessionCache.renameSession(sessionId, name)
+    }
+
+    setSessionCodexSessionId(sessionId: string, codexSessionId: string): void {
+        const trimmedCodexSessionId = codexSessionId.trim()
+        if (!trimmedCodexSessionId) {
+            return
+        }
+
+        const session = this.getSession(sessionId)
+        if (!session?.metadata || session.metadata.codexSessionId === trimmedCodexSessionId) {
+            return
+        }
+
+        this.sessionCache.updateSessionMetadata(sessionId, {
+            ...session.metadata,
+            codexSessionId: trimmedCodexSessionId
+        }, { touchUpdatedAt: false })
     }
 
     async deleteSession(sessionId: string): Promise<void> {
@@ -690,20 +597,7 @@ export class SyncEngine {
         }
 
         if (session.metadata?.source === 'native-attached') {
-            let resumed = false
-            try {
-                resumed = await this.nativeSessions.resume(access.sessionId, namespace, { allowRestart: true })
-            } catch (error) {
-                return {
-                    type: 'error',
-                    message: error instanceof Error ? error.message : 'Native session resume failed',
-                    code: 'resume_failed'
-                }
-            }
-            if (!resumed) {
-                return { type: 'error', message: 'Native session is unavailable', code: 'resume_unavailable' }
-            }
-            return { type: 'success', sessionId: access.sessionId }
+            return { type: 'error', message: nativeTmuxRetiredMessage, code: 'resume_unavailable' }
         }
 
         const metadata = session.metadata
@@ -824,6 +718,22 @@ export class SyncEngine {
 
     async listCodexThreads(sessionId: string, params: RpcCodexThreadListParams = {}): Promise<RpcCodexThreadListResponse> {
         return await this.rpcGateway.listCodexThreads(sessionId, params)
+    }
+
+    async listCodexThreadsFromMachine(machineId: string, params: RpcCodexThreadListParams = {}): Promise<RpcCodexThreadListResponse> {
+        return await this.rpcGateway.listCodexThreadsFromMachine(machineId, params)
+    }
+
+    async readCodexThreadFromMachine(machineId: string, params: RpcCodexThreadReadParams): Promise<RpcCodexThreadReadResponse> {
+        return await this.rpcGateway.readCodexThreadFromMachine(machineId, params)
+    }
+
+    async codexAppServerFromMachine<TMethod extends CodexAppServerMethod>(
+        machineId: string,
+        method: TMethod,
+        params: CodexAppServerParams<TMethod>
+    ): Promise<CodexAppServerResult<TMethod>> {
+        return await this.rpcGateway.codexAppServerFromMachine(machineId, method, params)
     }
 
     async readCodexThread(sessionId: string, params: RpcCodexThreadReadParams): Promise<RpcCodexThreadReadResponse> {

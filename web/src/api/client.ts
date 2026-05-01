@@ -20,6 +20,7 @@ import type {
     CodexThreadRollbackResponse,
     CodexThreadTurnsListResponse,
     CodexThreadUnarchiveResponse,
+    CodexModelListResponse,
     CodexOpenStrategy,
     CodexTurnSteerParams,
     CodexTurnSteerResponse,
@@ -33,8 +34,6 @@ import type {
     MessagesResponse,
     ProjectsResponse,
     CreateProjectResponse,
-    NativeSessionAttachResponse,
-    NativeSessionsResponse,
     PermissionMode,
     PushSubscriptionPayload,
     PushUnsubscribePayload,
@@ -42,6 +41,7 @@ import type {
     SlashCommandsResponse,
     SkillsResponse,
     SpawnResponse,
+    SessionOpenResponse,
     UploadFileResponse,
     VisibilityPayload,
     SessionResponse,
@@ -444,6 +444,13 @@ export class ApiClient {
         ) as CodexReviewStartResponse
     }
 
+    async listCodexModels(
+        sessionId: string,
+        params: CodexAppServerParams<'model/list'>
+    ): Promise<CodexModelListResponse> {
+        return await this.codexAppServer(sessionId, 'model/list', params) as CodexModelListResponse
+    }
+
     async listCodexSkills(
         sessionId: string,
         params: CodexAppServerParams<'skills/list'>
@@ -537,8 +544,8 @@ export class ApiClient {
         codexSessionId: string
         title?: string
         openStrategy?: CodexOpenStrategy
-    }): Promise<NativeSessionAttachResponse> {
-        return await this.request<NativeSessionAttachResponse>('/api/codex-sessions/open', {
+    }): Promise<SessionOpenResponse> {
+        return await this.request<SessionOpenResponse>('/api/codex-sessions/open', {
             method: 'POST',
             body: JSON.stringify(payload)
         })
@@ -620,40 +627,6 @@ export class ApiClient {
 
     async getMachines(): Promise<MachinesResponse> {
         return await this.request<MachinesResponse>('/api/machines')
-    }
-
-    async discoverNativeSessions(): Promise<NativeSessionsResponse> {
-        return await this.request<NativeSessionsResponse>('/api/native-sessions/discover')
-    }
-
-    async attachNativeSession(payload: {
-        tmuxSession: string
-        tmuxPane: string
-        agent?: 'codex'
-        title?: string
-    }): Promise<NativeSessionAttachResponse> {
-        return await this.request<NativeSessionAttachResponse>('/api/native-sessions/attach', {
-            method: 'POST',
-            body: JSON.stringify(payload)
-        })
-    }
-
-    async createNativeSession(payload: {
-        cwd: string
-        agent?: 'codex'
-        title?: string
-    }): Promise<NativeSessionAttachResponse> {
-        return await this.request<NativeSessionAttachResponse>('/api/native-sessions/create', {
-            method: 'POST',
-            body: JSON.stringify(payload)
-        })
-    }
-
-    async detachNativeSession(sessionId: string): Promise<void> {
-        await this.request(`/api/native-sessions/${encodeURIComponent(sessionId)}/detach`, {
-            method: 'POST',
-            body: JSON.stringify({})
-        })
     }
 
     async checkMachinePathsExists(

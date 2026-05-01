@@ -8,13 +8,11 @@ This path is useful when:
 - you do not want to expose inbound ports on the local network
 - you already have a VPS with a public domain
 
-This guide is written for the current native session flow:
+This guide is written for the current Codex app-server flow:
 
 - HAPI Hub + Web run on your own machine
-- `tmux + codex` also run on your own machine
+- Codex runs through an online HAPI runner and app-server on your own machine
 - the VPS only does HTTPS ingress + reverse proxy
-
-> Native attach currently supports `codex` only. Native `claude` attach is intentionally disabled for now.
 
 ## Recommended topology
 
@@ -33,12 +31,12 @@ reverse SSH tunnel
     |
 HAPI Hub + Web
     |
-tmux -> codex
+HAPI runner -> codex app-server
 ```
 
 ## Prerequisites
 
-- local machine: Bun, `tmux`, `codex`, SSH client
+- local machine: Bun, `codex`, SSH client
 - VPS: public IP, domain / subdomain, SSH server
 - VPS: Caddy or Nginx
 
@@ -167,34 +165,19 @@ Print the browser token on your local machine:
 
 Open the VPS-backed public URL and sign in with that token.
 
-## 7. Native codex attach flow
-
-Start Codex in `tmux` on your own machine:
-
-```bash
-tmux new -s work-a
-codex
-```
-
-Then in HAPI Web:
-
-1. open `Create Session`
-2. use `Attach Native Session`
-3. pick the detected `codex` pane
-
 ## Operational split
 
 - local hub/web process: `./scripts/public-deploy.sh`
 - local reverse tunnel: `./scripts/vps-relay.sh`
 - VPS HTTPS ingress: Caddy / Nginx service
-- native sessions: `tmux + codex`
+- Codex work: HAPI runner + app-server
 
 That separation keeps failures isolated:
 
 - local code change: restart hub only
 - SSH instability: restart reverse tunnel only
 - VPS cert / proxy change: restart Caddy only
-- agent work continues inside `tmux`
+- agent work continues through the runner/app-server path
 
 ## Troubleshooting
 
@@ -215,11 +198,3 @@ Check:
 - VPS `sshd_config` allows remote forwarding
 - your SSH user is allowed to open reverse tunnels
 - local machine can SSH out to the VPS
-
-### Native session list is empty
-
-Check:
-
-- `tmux` is installed on the local machine
-- `codex` is running inside `tmux`
-- HAPI is running on that same local machine

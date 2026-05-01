@@ -13,7 +13,6 @@ RUNNER_FILE="$DEPLOY_HOME/run-hub.sh"
 LAUNCHD_LABEL="${HAPI_LAUNCHD_LABEL:-com.hapi.hub.public}"
 LAUNCHD_PLIST_DIR="$HOME/Library/LaunchAgents"
 LAUNCHD_PLIST_FILE="$LAUNCHD_PLIST_DIR/$LAUNCHD_LABEL.plist"
-NATIVE_LEADER_PRIORITY="${HAPI_NATIVE_LEADER_PRIORITY:-200}"
 
 # GUI apps, launchd jobs, and non-interactive shells often skip shell rc files.
 # Bootstrap Bun from its default install location so the deploy script is self-contained.
@@ -53,7 +52,7 @@ Environment:
 Notes:
   - This script manages the local hub only.
   - Pair it with a reverse proxy or Cloudflare Tunnel for public access.
-  - Native attach currently supports codex tmux sessions only.
+  - Codex runtime support is app-server first; native/tmux attach is retired.
 EOF
 }
 
@@ -183,7 +182,6 @@ set -euo pipefail
 
 export BUN_INSTALL='$BUN_INSTALL'
 export HAPI_LAUNCHD_LABEL='$LAUNCHD_LABEL'
-export HAPI_NATIVE_LEADER_PRIORITY='$NATIVE_LEADER_PRIORITY'
 
 if [[ -x "\$BUN_INSTALL/bin/bun" ]]; then
     export PATH="\$BUN_INSTALL/bin:\$PATH"

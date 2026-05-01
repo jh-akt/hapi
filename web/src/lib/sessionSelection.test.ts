@@ -26,8 +26,8 @@ function makeCodexSession(
         attachedSessionId: null,
         listSource: 'codex-history',
         codexSessionId: overrides.codexSessionId,
-        codexOrigin: overrides.codexOrigin ?? 'transcript-fallback',
-        openStrategy: overrides.openStrategy ?? 'open-native-resume'
+        codexOrigin: overrides.codexOrigin ?? 'app-server-thread',
+        openStrategy: overrides.openStrategy ?? 'open-app-server-thread'
     }
 }
 

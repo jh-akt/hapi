@@ -16,7 +16,6 @@ import { App } from '@/App'
 import { SessionChat } from '@/components/SessionChat'
 import { SessionList } from '@/components/SessionList'
 import { NewSession } from '@/components/NewSession'
-import { NativeSessionAttach } from '@/components/NativeSessionAttach'
 import { LoadingState } from '@/components/LoadingState'
 import { useAppContext } from '@/lib/app-context'
 import { useAppGoBack } from '@/hooks/useAppGoBack'
@@ -26,7 +25,7 @@ import { useMessages } from '@/hooks/queries/useMessages'
 import { useMachines } from '@/hooks/queries/useMachines'
 import { useCodexSessions } from '@/hooks/queries/useCodexSessions'
 import { canReadCodexThreadFromAppServer, useCodexThreadMessages } from '@/hooks/queries/useCodexThreadMessages'
-import { useSession } from '@/hooks/queries/useSession'
+import { isSessionMissingErrorMessage, useSession } from '@/hooks/queries/useSession'
 import { useProjects } from '@/hooks/queries/useProjects'
 import { useSlashCommands } from '@/hooks/queries/useSlashCommands'
 import { useSkills } from '@/hooks/queries/useSkills'
@@ -190,7 +189,6 @@ function SessionsPage() {
                 await Promise.all([
                     queryClient.invalidateQueries({ queryKey: queryKeys.sessions }),
                     queryClient.invalidateQueries({ queryKey: queryKeys.codexSessions }),
-                    queryClient.invalidateQueries({ queryKey: queryKeys.nativeSessions }),
                     queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) }),
                     ...(previousSessionId && previousSessionId !== sessionId
                         ? [queryClient.invalidateQueries({ queryKey: queryKeys.session(previousSessionId) })]
@@ -423,7 +421,7 @@ function SessionPage() {
     }, [codexThreadMessages, prefersCodexThreadRead, refetchMessages, refetchSession])
 
     if (error) {
-        const sessionMissing = error.includes('HTTP 404') || error.includes('Session not found')
+        const sessionMissing = isSessionMissingErrorMessage(error)
         return (
             <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-4 text-center">
                 <div className="max-w-md rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-4 py-3">
@@ -477,10 +475,11 @@ function SessionPage() {
             ? [messagesWarning, `Codex app-server read failed; using HAPI history. ${codexThreadMessages.warning}`].filter(Boolean).join('\n')
             : messagesWarning
     const displayedLoading = useCodexThreadRead ? codexThreadMessages.isLoading : messagesLoading
-    const displayedHasMore = useCodexThreadRead ? false : messagesHasMore
-    const displayedLoadMore = useCodexThreadRead ? async () => {} : loadMoreMessages
+    const displayedHasMore = useCodexThreadRead ? codexThreadMessages.hasMore : messagesHasMore
+    const displayedLoadMore = useCodexThreadRead ? codexThreadMessages.loadMore : loadMoreMessages
+    const displayedLoadingMore = useCodexThreadRead ? codexThreadMessages.isLoadingMore : messagesLoadingMore
     const displayedMessagesVersion = useCodexThreadRead
-        ? messagesVersion + codexThreadMessages.messages.length
+        ? messagesVersion + codexThreadMessages.messagesVersion
         : messagesVersion
 
     return (
@@ -491,7 +490,7 @@ function SessionPage() {
             messagesWarning={displayedWarning}
             hasMoreMessages={displayedHasMore}
             isLoadingMessages={displayedLoading}
-            isLoadingMoreMessages={messagesLoadingMore}
+            isLoadingMoreMessages={displayedLoadingMore}
             isSending={isSending}
             pendingCount={pendingCount}
             messagesVersion={displayedMessagesVersion}
@@ -544,15 +543,6 @@ function NewSessionPage() {
         })
     }, [navigate, queryClient])
 
-    const handleProjectCreated = useCallback((projectPath: string) => {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.projects })
-        navigate({
-            to: '/sessions',
-            replace: true,
-            search: { projectPath }
-        })
-    }, [navigate, queryClient])
-
     return (
         <div className="flex h-full min-h-0 flex-col">
             <div className="flex items-center gap-2 border-b border-[var(--app-border)] bg-[var(--app-bg)] p-3 pt-[calc(0.75rem+env(safe-area-inset-top))]">
@@ -589,15 +579,10 @@ function NewSessionPage() {
                 ) : !machinesLoading ? (
                     <div className="px-3 py-4">
                         <div className="rounded-md border border-dashed border-[var(--app-border)] px-3 py-4 text-sm text-[var(--app-hint)]">
-                            {t('newSession.noMachinesNativeHint')}
+                            {t('newSession.noMachinesHint')}
                         </div>
                     </div>
                 ) : null}
-                <NativeSessionAttach
-                    api={api}
-                    onSuccess={handleSuccess}
-                    onProjectCreated={handleProjectCreated}
-                />
             </div>
         </div>
     )

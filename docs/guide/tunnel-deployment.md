@@ -4,13 +4,11 @@ Deploy HAPI on your own machine and expose it through a tunnel or reverse proxy.
 
 If your local machine has no public IP and you prefer to front it with your own VPS, see [VPS Relay Deployment](./vps-relay-deployment.md).
 
-This guide is written for the current native session flow:
+This guide is written for the current Codex app-server flow:
 
 - HAPI Hub + Web served from your machine
 - remote access through your own domain / tunnel
-- native attach for `tmux + codex`
-
-> Native attach currently supports `codex` only. Native `claude` attach is intentionally disabled for now.
+- Codex sessions spawned through an online HAPI runner
 
 ## Recommended topology
 
@@ -25,13 +23,12 @@ Cloudflare Tunnel / Reverse Proxy
     |
 HAPI Hub + Web
     |
-tmux -> codex
+HAPI runner -> codex app-server
 ```
 
 ## Prerequisites
 
 - Bun
-- `tmux`
 - `codex`
 - a public HTTPS hostname
 - optional: `cloudflared`
@@ -116,32 +113,17 @@ Print the browser token:
 
 Open your public URL and sign in with that token.
 
-## Native codex attach flow
-
-Start Codex in `tmux` on the deployment machine:
-
-```bash
-tmux new -s work-a
-codex
-```
-
-Then in HAPI Web:
-
-1. open `Create Session`
-2. use `Attach Native Session`
-3. pick the detected `codex` pane
-
 ## Recommended operational split
 
 - Hub/Web: managed by `./scripts/public-deploy.sh`
 - Tunnel: managed by `cloudflared` / system service
-- Native sessions: managed inside `tmux`
+- Codex work: managed through HAPI runner + app-server
 
 That split keeps restart scope small:
 
 - restart hub when code changes
 - restart tunnel when networking changes
-- keep `tmux + codex` alive independently
+- keep runner health separate from network changes
 
 ## Troubleshooting
 
@@ -153,14 +135,6 @@ Check:
 - `HAPI_PUBLIC_URL` matches the public HTTPS origin
 - `CORS_ORIGINS` matches the same origin
 - do not use Cloudflare Quick Tunnel; use a named tunnel
-
-### Native session list is empty
-
-Check:
-
-- `tmux` is installed
-- `codex` is running inside `tmux`
-- pane command resolves to `codex`
 
 ### I can open the site but cannot log in
 

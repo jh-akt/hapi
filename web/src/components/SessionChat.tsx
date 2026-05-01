@@ -22,11 +22,13 @@ import { createAttachmentAdapter } from '@/lib/attachmentAdapter'
 import { findUnsupportedCodexBuiltinSlashCommand, parseCodexReviewSlashCommand } from '@/lib/codexSlashCommands'
 import { useToast } from '@/lib/toast-context'
 import { useTranslation } from '@/lib/use-translation'
-import { CodexWorkspacePanel } from '@/components/CodexWorkspacePanel'
+import { CodexWorkspacePanel, type CodexWorkspacePanelTab } from '@/components/CodexWorkspacePanel'
 import { SessionHeader } from '@/components/SessionHeader'
 import { TeamPanel } from '@/components/TeamPanel'
 import { usePlatform } from '@/hooks/usePlatform'
 import { useSessionActions } from '@/hooks/mutations/useSessionActions'
+import { canReadCodexThreadFromAppServer } from '@/hooks/queries/useCodexThreadMessages'
+import { useCodexModels } from '@/hooks/queries/useCodexModels'
 import { useVoiceOptional } from '@/lib/voice-context'
 import { RealtimeVoiceSession, registerSessionStore, registerVoiceHooksStore, voiceHooks } from '@/realtime'
 import { isRemoteTerminalSupported } from '@/utils/terminalSupport'
@@ -63,9 +65,26 @@ export function SessionChat(props: {
     const blocksByIdRef = useRef<Map<string, ChatBlock>>(new Map())
     const [forceScrollToken, setForceScrollToken] = useState(0)
     const [reviewThreadId, setReviewThreadId] = useState<string | null>(null)
+    const [workspacePanelTab, setWorkspacePanelTab] = useState<CodexWorkspacePanelTab>('messages')
     const agentFlavor = props.session.metadata?.flavor ?? null
     const controlledByUser = props.session.agentState?.controlledByUser === true
     const codexCollaborationModeSupported = agentFlavor === 'codex' && !controlledByUser
+    const sessionModelChangeSupported = props.session.active
+        && !isNativeSession
+        && (agentFlavor !== 'codex' || !controlledByUser)
+    const codexRemoteConfigSupported = agentFlavor === 'codex'
+        && props.session.active
+        && !isNativeSession
+        && !controlledByUser
+    const codexModels = useCodexModels(
+        props.api,
+        props.session.id,
+        props.session.model,
+        codexRemoteConfigSupported
+    )
+    const dynamicCodexModelOptions = agentFlavor === 'codex' && codexModels.modelOptions.length > 1
+        ? codexModels.modelOptions
+        : undefined
     const {
         abortSession,
         switchSession,
@@ -85,9 +104,15 @@ export function SessionChat(props: {
     const codexThreadId = typeof props.session.metadata?.codexSessionId === 'string'
         ? props.session.metadata.codexSessionId.trim()
         : ''
+    const showCodexWorkspacePanel = canReadCodexThreadFromAppServer(props.session) && codexThreadId.length > 0
+    const showThread = !showCodexWorkspacePanel || workspacePanelTab === 'messages'
     const reviewStorageKey = codexThreadId
         ? `hapi:codex-review-thread:${props.session.id}:${codexThreadId}`
         : null
+
+    useEffect(() => {
+        setWorkspacePanelTab('messages')
+    }, [props.session.id])
 
     useEffect(() => {
         if (!reviewStorageKey) {
@@ -458,33 +483,39 @@ export function SessionChat(props: {
             <CodexWorkspacePanel
                 api={props.api}
                 session={props.session}
+                activeTab={workspacePanelTab}
+                onTabChange={setWorkspacePanelTab}
                 reviewThreadId={reviewThreadId}
                 onReviewThreadIdChange={handleReviewThreadIdChange}
             />
 
             <AssistantRuntimeProvider runtime={runtime}>
                 <div className="relative flex min-h-0 flex-1 flex-col">
-                    <HappyThread
-                        key={props.session.id}
-                        api={props.api}
-                        sessionId={props.session.id}
-                        metadata={props.session.metadata}
-                        disabled={sessionInactive}
-                        onRefresh={props.onRefresh}
-                        onRetryMessage={props.onRetryMessage}
-                        onFlushPending={props.onFlushPending}
-                        onAtBottomChange={props.onAtBottomChange}
-                        isLoadingMessages={props.isLoadingMessages}
-                        messagesWarning={props.messagesWarning}
-                        hasMoreMessages={props.hasMoreMessages}
-                        isLoadingMoreMessages={props.isLoadingMoreMessages}
-                        onLoadMore={props.onLoadMore}
-                        pendingCount={props.pendingCount}
-                        rawMessagesCount={props.messages.length}
-                        normalizedMessagesCount={normalizedMessages.length}
-                        messagesVersion={props.messagesVersion}
-                        forceScrollToken={forceScrollToken}
-                    />
+                    {showThread ? (
+                        <HappyThread
+                            key={props.session.id}
+                            api={props.api}
+                            sessionId={props.session.id}
+                            metadata={props.session.metadata}
+                            disabled={sessionInactive}
+                            onRefresh={props.onRefresh}
+                            onRetryMessage={props.onRetryMessage}
+                            onFlushPending={props.onFlushPending}
+                            onAtBottomChange={props.onAtBottomChange}
+                            isLoadingMessages={props.isLoadingMessages}
+                            messagesWarning={props.messagesWarning}
+                            hasMoreMessages={props.hasMoreMessages}
+                            isLoadingMoreMessages={props.isLoadingMoreMessages}
+                            onLoadMore={props.onLoadMore}
+                            pendingCount={props.pendingCount}
+                            rawMessagesCount={props.messages.length}
+                            normalizedMessagesCount={normalizedMessages.length}
+                            messagesVersion={props.messagesVersion}
+                            forceScrollToken={forceScrollToken}
+                        />
+                    ) : (
+                        <div className="min-h-0 flex-1" />
+                    )}
 
                     <HappyComposer
                         key={props.session.id}
@@ -494,6 +525,8 @@ export function SessionChat(props: {
                         collaborationMode={codexCollaborationModeSupported ? props.session.collaborationMode : undefined}
                         model={props.session.model}
                         modelReasoningEffort={agentFlavor === 'codex' ? props.session.modelReasoningEffort : undefined}
+                        modelOptions={dynamicCodexModelOptions}
+                        codexModels={agentFlavor === 'codex' ? codexModels.models : undefined}
                         effort={props.session.effort}
                         agentFlavor={agentFlavor}
                         active={props.session.active}
@@ -509,7 +542,7 @@ export function SessionChat(props: {
                                 : undefined
                         }
                         onPermissionModeChange={!isNativeSession ? handlePermissionModeChange : undefined}
-                        onModelChange={!isNativeSession ? handleModelChange : undefined}
+                        onModelChange={sessionModelChangeSupported ? handleModelChange : undefined}
                         onModelReasoningEffortChange={
                             !isNativeSession && agentFlavor === 'codex' && props.session.active && !controlledByUser
                                 ? handleModelReasoningEffortChange

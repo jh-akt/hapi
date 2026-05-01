@@ -7,6 +7,11 @@ import { EventPublisher } from './eventPublisher'
 import { extractTodoWriteTodosFromMessageContent, TodosSchema } from './todos'
 import { extractBackgroundTaskDelta } from './backgroundTasks'
 
+function isRetiredNativeTmuxSession(session: Session): boolean {
+    return session.namespace === 'retired-native-tmux'
+        || session.metadata?.archiveReason === 'retired-native-tmux-session'
+}
+
 export class SessionCache {
     private readonly sessions: Map<string, Session> = new Map()
     private readonly lastBroadcastAtBySessionId: Map<string, number> = new Map()
@@ -46,6 +51,9 @@ export class SessionCache {
     ): { ok: true; sessionId: string; session: Session } | { ok: false; reason: 'not-found' | 'access-denied' } {
         const session = this.sessions.get(sessionId) ?? this.refreshSession(sessionId)
         if (session) {
+            if (isRetiredNativeTmuxSession(session)) {
+                return { ok: false, reason: 'not-found' }
+            }
             if (session.namespace !== namespace) {
                 return { ok: false, reason: 'access-denied' }
             }

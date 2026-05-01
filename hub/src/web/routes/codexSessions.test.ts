@@ -3,7 +3,7 @@ import { Hono } from 'hono'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Session, SyncEngine } from '../../sync/syncEngine'
+import type { Machine, Session, SyncEngine } from '../../sync/syncEngine'
 import type { WebAppEnv } from '../middleware/auth'
 import { createCodexSessionsRoutes } from './codexSessions'
 
@@ -84,13 +84,40 @@ function createSession(overrides?: Partial<Session>): Session {
     }
 }
 
+function createMachine(overrides?: Partial<Machine>): Machine {
+    return {
+        id: 'machine-1',
+        namespace: 'default',
+        seq: 1,
+        createdAt: 1,
+        updatedAt: 10,
+        active: true,
+        activeAt: 10,
+        metadata: {
+            host: 'localhost',
+            platform: 'darwin',
+            happyCliVersion: '0.0.0',
+            homeDir: homedir(),
+            happyHomeDir: join(homedir(), '.hapi'),
+            happyLibDir: join(homedir(), '.hapi')
+        },
+        metadataVersion: 1,
+        runnerState: { status: 'running' },
+        runnerStateVersion: 1,
+        ...overrides
+    }
+}
+
 function createApp(engine: Partial<SyncEngine>) {
     const app = new Hono<WebAppEnv>()
     app.use('*', async (c, next) => {
         c.set('namespace', 'default')
         await next()
     })
-    app.route('/api', createCodexSessionsRoutes(() => engine as SyncEngine))
+    app.route('/api', createCodexSessionsRoutes(() => ({
+        getMachinesByNamespace: () => [],
+        ...engine
+    }) as SyncEngine))
     return app
 }
 
@@ -131,6 +158,7 @@ describe('codex sessions routes', () => {
                             {
                                 id: '66666666-6666-6666-6666-666666666666',
                                 cwd: '/tmp/remote-project',
+                                path: '/Users/tester/.codex/sessions/2026/04/24/rollout-archived.jsonl',
                                 updatedAt: 150,
                                 preview: 'older archived thread'
                             }
@@ -145,6 +173,7 @@ describe('codex sessions routes', () => {
                         {
                             id: currentThreadId,
                             cwd: '/tmp/remote-project',
+                            path: '/Users/tester/.codex/sessions/2026/04/24/rollout-current.jsonl',
                             updatedAt: 300,
                             name: 'Remote current thread',
                             preview: 'live fix',
@@ -198,7 +227,7 @@ describe('codex sessions routes', () => {
         ])
     })
 
-    it('returns transcript-first codex sessions', async () => {
+    it('returns attached codex sessions without transcript fallback entries', async () => {
         const codexHomeDir = makeTempCodexHome()
         process.env.CODEX_HOME = codexHomeDir
 
@@ -227,7 +256,7 @@ describe('codex sessions routes', () => {
                         host: 'localhost',
                         name: 'project',
                         flavor: 'codex',
-                        source: 'native-attached',
+                        source: 'managed',
                         codexSessionId: '11111111-1111-1111-1111-111111111111'
                     }
                 })
@@ -246,28 +275,16 @@ describe('codex sessions routes', () => {
                     codexOrigin: 'attached',
                     openStrategy: 'navigate-attached',
                     metadata: expect.objectContaining({
-                        name: 'fix bug',
+                        name: 'project',
                         path: '/tmp/project',
                         agentSessionId: '11111111-1111-1111-1111-111111111111'
-                    })
-                }),
-                expect.objectContaining({
-                    id: 'codex:22222222-2222-2222-2222-222222222222',
-                    attachedSessionId: null,
-                    codexSessionId: '22222222-2222-2222-2222-222222222222',
-                    codexOrigin: 'transcript-fallback',
-                    openStrategy: 'open-native-resume',
-                    metadata: expect.objectContaining({
-                        name: 'add tests',
-                        path: '/tmp/project-b',
-                        summary: { text: 'add tests' }
                     })
                 })
             ]
         })
     })
 
-    it('keeps transcript fallback when app-server thread listing fails', async () => {
+    it('does not fall back to transcript entries when app-server thread listing fails', async () => {
         const codexHomeDir = makeTempCodexHome()
         process.env.CODEX_HOME = codexHomeDir
 
@@ -301,7 +318,7 @@ describe('codex sessions routes', () => {
 
         expect(response.status).toBe(200)
         expect(await response.json()).toEqual({
-            sessions: expect.arrayContaining([
+            sessions: [
                 expect.objectContaining({
                     id: 'session-1',
                     attachedSessionId: 'session-1',
@@ -310,18 +327,8 @@ describe('codex sessions routes', () => {
                         path: '/tmp/remote-project',
                         agentSessionId: '99999999-9999-9999-9999-999999999999'
                     })
-                }),
-                expect.objectContaining({
-                    id: 'codex:88888888-8888-8888-8888-888888888888',
-                    attachedSessionId: null,
-                    codexSessionId: '88888888-8888-8888-8888-888888888888',
-                    metadata: expect.objectContaining({
-                        name: 'fallback transcript',
-                        path: '/tmp/fallback-project',
-                        summary: { text: 'fallback transcript' }
-                    })
                 })
-            ])
+            ]
         })
     })
 
@@ -346,7 +353,7 @@ describe('codex sessions routes', () => {
                         host: 'localhost',
                         name: 'Release blocker fix',
                         flavor: 'codex',
-                        source: 'native-attached',
+                        source: 'managed',
                         codexSessionId: '33333333-3333-3333-3333-333333333333'
                     }
                 })
@@ -360,8 +367,7 @@ describe('codex sessions routes', () => {
             sessions: [
                 expect.objectContaining({
                     metadata: expect.objectContaining({
-                        name: 'Release blocker fix',
-                        summary: { text: 'refactor runner' }
+                        name: 'Release blocker fix'
                     })
                 })
             ]
@@ -423,7 +429,7 @@ describe('codex sessions routes', () => {
         })
     })
 
-    it('includes vscode-sourced codex transcripts in the catalog', async () => {
+    it('does not expose transcript-only Codex entries after native tmux retirement', async () => {
         const codexHomeDir = makeTempCodexHome()
         process.env.CODEX_HOME = codexHomeDir
 
@@ -446,25 +452,14 @@ describe('codex sessions routes', () => {
 
         expect(response.status).toBe(200)
         expect(await response.json()).toEqual({
-            sessions: [
-                expect.objectContaining({
-                    id: 'codex:44444444-4444-4444-4444-444444444444',
-                    codexSessionId: '44444444-4444-4444-4444-444444444444',
-                    metadata: expect.objectContaining({
-                        name: 'inspect android build',
-                        path: '/tmp/project-d',
-                        summary: { text: 'inspect android build' }
-                    })
-                })
-            ]
+            sessions: []
         })
     })
 
-    it('normalizes transcript and attached session paths before returning them', async () => {
+    it('normalizes attached session paths before returning them', async () => {
         const codexHomeDir = makeTempCodexHome()
         process.env.CODEX_HOME = codexHomeDir
 
-        const transcriptPath = join(homedir(), 'Code', 'desktop-project')
         const attachedPath = join(homedir(), 'Code', 'managed-project')
 
         writeTranscriptFile({
@@ -503,12 +498,6 @@ describe('codex sessions routes', () => {
                     id: 'session-managed-path',
                     metadata: expect.objectContaining({
                         path: attachedPath
-                    })
-                }),
-                expect.objectContaining({
-                    id: 'codex:66666666-1111-1111-1111-111111111111',
-                    metadata: expect.objectContaining({
-                        path: transcriptPath
                     })
                 })
             ])
@@ -623,12 +612,62 @@ describe('codex sessions routes', () => {
         })
     })
 
-    it('opens a codex session by transcript session id', async () => {
+    it('lists app-server threads through an online runner machine when no codex session exists', async () => {
         const app = createApp({
             getSessionsByNamespace: () => [],
-            openCodexSession: async () => ({
-                id: 'session-2'
-            } as Session)
+            getMachinesByNamespace: () => [
+                createMachine({
+                    id: 'machine-catalog',
+                    metadata: {
+                        host: 'macbook',
+                        platform: 'darwin',
+                        happyCliVersion: '0.0.0',
+                        homeDir: '/Users/tester',
+                        happyHomeDir: '/Users/tester/.hapi',
+                        happyLibDir: '/Users/tester/.hapi'
+                    }
+                })
+            ],
+            listCodexThreadsFromMachine: async () => ({
+                data: [
+                    {
+                        id: 'thread-from-machine',
+                        cwd: '/Users/tester/project',
+                        path: '/Users/tester/.codex/sessions/2026/04/24/rollout-machine.jsonl',
+                        preview: 'machine thread preview',
+                        updatedAt: 1_777_000_000_000
+                    }
+                ],
+                nextCursor: null,
+                backwardsCursor: null
+            })
+        })
+
+        const response = await app.request('/api/codex-sessions')
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({
+            sessions: [
+                expect.objectContaining({
+                    id: 'codex:thread-from-machine',
+                    attachedSessionId: null,
+                    codexSessionId: 'thread-from-machine',
+                    codexOrigin: 'app-server-thread',
+                    openStrategy: 'open-app-server-thread',
+                    metadata: expect.objectContaining({
+                        name: 'machine thread preview',
+                        path: '/Users/tester/project',
+                        machineId: 'machine-catalog',
+                        agentSessionId: 'thread-from-machine'
+                    })
+                })
+            ]
+        })
+    })
+
+    it('rejects transcript fallback native resume after tmux retirement', async () => {
+        const app = createApp({
+            getSessionsByNamespace: () => []
         })
 
         const response = await app.request('/api/codex-sessions/open', {
@@ -640,12 +679,15 @@ describe('codex sessions routes', () => {
             })
         })
 
-        expect(response.status).toBe(200)
-        expect(await response.json()).toEqual({ sessionId: 'session-2' })
+        expect(response.status).toBe(409)
+        expect(await response.json()).toEqual({
+            error: 'Native tmux resume has been retired. Open this Codex thread from an app-server-backed session.'
+        })
     })
 
     it('opens app-server thread history by spawning a remote codex resume session', async () => {
         const spawnCalls: unknown[][] = []
+        const setCodexSessionIdCalls: unknown[][] = []
         const app = createApp({
             getSessionsByNamespace: () => [
                 createSession({
@@ -669,6 +711,7 @@ describe('codex sessions routes', () => {
                     {
                         id: 'thread-target',
                         cwd: '/tmp/target-project',
+                        path: '/Users/tester/.codex/sessions/2026/04/24/rollout-target.jsonl',
                         name: 'Target app-server thread',
                         updatedAt: 1_777_000_000_000
                     }
@@ -679,6 +722,9 @@ describe('codex sessions routes', () => {
             spawnSession: async (...args: unknown[]) => {
                 spawnCalls.push(args)
                 return { type: 'success', sessionId: 'session-spawned' }
+            },
+            setSessionCodexSessionId: (...args: unknown[]) => {
+                setCodexSessionIdCalls.push(args)
             }
         })
 
@@ -710,10 +756,66 @@ describe('codex sessions routes', () => {
                 'acceptEdits'
             ]
         ])
+        expect(setCodexSessionIdCalls).toEqual([
+            ['session-spawned', 'thread-target']
+        ])
+    })
+
+    it('opens machine-listed app-server thread history by spawning a remote codex resume session', async () => {
+        const spawnCalls: unknown[][] = []
+        const app = createApp({
+            getSessionsByNamespace: () => [],
+            getMachinesByNamespace: () => [
+                createMachine({ id: 'machine-catalog' })
+            ],
+            listCodexThreadsFromMachine: async () => ({
+                data: [
+                    {
+                        id: 'thread-target',
+                        cwd: '/tmp/target-project',
+                        path: '/Users/tester/.codex/sessions/2026/04/24/rollout-target.jsonl',
+                        updatedAt: 1_777_000_000_000
+                    }
+                ],
+                nextCursor: null,
+                backwardsCursor: null
+            }),
+            spawnSession: async (...args: unknown[]) => {
+                spawnCalls.push(args)
+                return { type: 'success', sessionId: 'session-spawned' }
+            }
+        })
+
+        const response = await app.request('/api/codex-sessions/open', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                cwd: '/tmp/ignored',
+                codexSessionId: 'thread-target',
+                openStrategy: 'open-app-server-thread'
+            })
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ sessionId: 'session-spawned' })
+        expect(spawnCalls).toEqual([
+            [
+                'machine-catalog',
+                '/tmp/target-project',
+                'codex',
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                'thread-target',
+                undefined,
+                undefined
+            ]
+        ])
     })
 
     it('does not silently fall back to native resume when requested app-server thread is unavailable', async () => {
-        let openedNative = false
         const app = createApp({
             getSessionsByNamespace: () => [
                 createSession({
@@ -732,11 +834,7 @@ describe('codex sessions routes', () => {
                 data: [],
                 nextCursor: null,
                 backwardsCursor: null
-            }),
-            openCodexSession: async () => {
-                openedNative = true
-                return createSession({ id: 'native-fallback' })
-            }
+            })
         })
 
         const response = await app.request('/api/codex-sessions/open', {
@@ -750,9 +848,8 @@ describe('codex sessions routes', () => {
         })
 
         expect(response.status).toBe(409)
-        expect(openedNative).toBe(false)
         expect(await response.json()).toEqual({
-            error: 'Codex app-server thread is not available from an online remote session'
+            error: 'Codex app-server thread is not available from an online runner'
         })
     })
 })
