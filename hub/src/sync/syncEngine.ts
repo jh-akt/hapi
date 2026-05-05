@@ -581,6 +581,13 @@ export class SyncEngine {
         )
     }
 
+    async listMachineCodexModels(
+        machineId: string,
+        params: CodexAppServerParams<'model/list'>
+    ): Promise<CodexAppServerResult<'model/list'>> {
+        return await this.rpcGateway.machineCodexAppServer(machineId, 'model/list', params)
+    }
+
     async resumeSession(sessionId: string, namespace: string): Promise<ResumeSessionResult> {
         const access = this.sessionCache.resolveSessionAccess(sessionId, namespace)
         if (!access.ok) {

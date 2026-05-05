@@ -461,6 +461,17 @@ export class RpcGateway {
         return await this.codexAppServerRpc(sessionId, method, params) as CodexAppServerResult<TMethod>
     }
 
+    async machineCodexAppServer<TMethod extends CodexAppServerMethod>(
+        machineId: string,
+        method: TMethod,
+        params: CodexAppServerParams<TMethod>
+    ): Promise<CodexAppServerResult<TMethod>> {
+        if (!isCodexAppServerMethod(method)) {
+            throw new Error(`Unsupported Codex app-server RPC method: ${method}`)
+        }
+        return await this.machineCodexAppServerRpc(machineId, method, params) as CodexAppServerResult<TMethod>
+    }
+
     private async sessionRpc(sessionId: string, method: string, params: unknown): Promise<unknown> {
         return await this.rpcCall(`${sessionId}:${method}`, params)
     }

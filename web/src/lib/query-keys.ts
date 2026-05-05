@@ -6,6 +6,7 @@ export const queryKeys = {
     codexThreadTurns: (sessionId: string, threadId: string) => ['codex-thread-turns', sessionId, threadId] as const,
     codexReviewThread: (sessionId: string, threadId: string) => ['codex-review-thread', sessionId, threadId] as const,
     codexModels: (sessionId: string) => ['codex-models', sessionId] as const,
+    machineCodexModels: (machineId: string) => ['machine-codex-models', machineId] as const,
     codexManagement: (sessionId: string, threadId: string, group: string) => [
         'codex-management',
         sessionId,

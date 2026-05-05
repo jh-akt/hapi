@@ -4,8 +4,9 @@ export type AgentType = 'claude' | 'codex' | 'cursor' | 'gemini' | 'opencode'
 export type SessionType = 'simple' | 'worktree'
 export type CodexReasoningEffort = 'default' | 'low' | 'medium' | 'high' | 'xhigh'
 export type ClaudeEffort = 'auto' | 'medium' | 'high' | 'max'
+export type NewSessionModelOption = { value: string; label: string }
 
-export const MODEL_OPTIONS: Record<AgentType, { value: string; label: string }[]> = {
+export const MODEL_OPTIONS: Record<AgentType, NewSessionModelOption[]> = {
     claude: [
         { value: 'auto', label: 'Auto' },
         { value: 'opus', label: 'Opus' },

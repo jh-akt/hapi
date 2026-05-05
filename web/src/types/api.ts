@@ -7,6 +7,7 @@ import type {
     SyncEvent as ProtocolSyncEvent,
     WorktreeMetadata
 } from '@hapi/protocol/types'
+import type { ModelListResponse as CodexModelListResponseType } from '@hapi/protocol/codex-app-server'
 
 export type {
     CodexAppServerMethod,
@@ -297,6 +298,7 @@ export type MessagesResponse = {
 
 export type MachinesResponse = { machines: Machine[] }
 export type MachinePathsExistsResponse = { exists: Record<string, boolean> }
+export type MachineCodexModelsResponse = CodexModelListResponseType
 export type SessionOpenResponse = { sessionId: string }
 
 export type SpawnResponse =

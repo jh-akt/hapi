@@ -5,6 +5,7 @@ import { usePlatform } from '@/hooks/usePlatform'
 import { useMachinePathsExists } from '@/hooks/useMachinePathsExists'
 import { useSpawnSession } from '@/hooks/mutations/useSpawnSession'
 import { useSessions } from '@/hooks/queries/useSessions'
+import { useMachineCodexModels } from '@/hooks/queries/useMachineCodexModels'
 import { useActiveSuggestions, type Suggestion } from '@/hooks/useActiveSuggestions'
 import { useDirectorySuggestions } from '@/hooks/useDirectorySuggestions'
 import { useRecentPaths } from '@/hooks/useRecentPaths'
@@ -55,6 +56,7 @@ export function NewSession(props: {
     const [directoryCreationConfirmed, setDirectoryCreationConfirmed] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const worktreeInputRef = useRef<HTMLInputElement>(null)
+    const machineCodexModels = useMachineCodexModels(props.api, machineId, agent === 'codex')
 
     useEffect(() => {
         if (sessionType === 'worktree') {
@@ -246,7 +248,10 @@ export function NewSession(props: {
                 return
             }
 
-            const resolvedModel = model !== 'auto' && agent !== 'opencode' ? model : undefined
+            const trimmedModel = model.trim()
+            const resolvedModel = trimmedModel !== 'auto' && trimmedModel && agent !== 'opencode'
+                ? trimmedModel
+                : undefined
             const resolvedEffort = agent === 'claude' && effort !== 'auto' ? effort : undefined
             const resolvedModelReasoningEffort = agent === 'codex' && modelReasoningEffort !== 'default'
                 ? modelReasoningEffort
@@ -326,6 +331,11 @@ export function NewSession(props: {
             <ModelSelector
                 agent={agent}
                 model={model}
+                modelOptions={
+                    agent === 'codex' && machineCodexModels.modelOptions.length > 1
+                        ? machineCodexModels.modelOptions
+                        : undefined
+                }
                 isDisabled={isFormDisabled}
                 onModelChange={setModel}
             />

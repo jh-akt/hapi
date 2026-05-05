@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
+import type { CodexAppServerParams } from '@hapi/protocol/codex-app-server'
 import type { SyncEngine } from '../../sync/syncEngine'
 import type { WebAppEnv } from '../middleware/auth'
 import { requireMachine } from './guards'
@@ -17,6 +18,24 @@ const spawnBodySchema = z.object({
 
 const pathsExistsSchema = z.object({
     paths: z.array(z.string().min(1)).max(1000)
+})
+
+const booleanQuerySchema = z.preprocess((value) => {
+    if (value === undefined) {
+        return undefined
+    }
+    if (value === 'true') {
+        return true
+    }
+    if (value === 'false') {
+        return false
+    }
+    return value
+}, z.boolean().optional())
+
+const codexModelsQuerySchema = z.object({
+    limit: z.coerce.number().int().min(1).max(500).optional(),
+    includeHidden: booleanQuerySchema
 })
 
 export function createMachinesRoutes(getSyncEngine: () => SyncEngine | null): Hono<WebAppEnv> {
@@ -64,6 +83,36 @@ export function createMachinesRoutes(getSyncEngine: () => SyncEngine | null): Ho
             parsed.data.effort
         )
         return c.json(result)
+    })
+
+    app.get('/machines/:id/codex-models', async (c) => {
+        const engine = getSyncEngine()
+        if (!engine) {
+            return c.json({ error: 'Not connected' }, 503)
+        }
+
+        const machineId = c.req.param('id')
+        const machine = requireMachine(c, engine, machineId)
+        if (machine instanceof Response) {
+            return machine
+        }
+
+        const parsed = codexModelsQuerySchema.safeParse(c.req.query())
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid query' }, 400)
+        }
+
+        const params: CodexAppServerParams<'model/list'> = {
+            limit: parsed.data.limit ?? 200,
+            includeHidden: parsed.data.includeHidden ?? false
+        }
+
+        try {
+            const result = await engine.listMachineCodexModels(machineId, params)
+            return c.json(result)
+        } catch {
+            return c.json({ data: [], nextCursor: null })
+        }
     })
 
     app.post('/machines/:id/paths/exists', async (c) => {

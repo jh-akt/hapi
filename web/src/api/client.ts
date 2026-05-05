@@ -29,6 +29,7 @@ import type {
     FileReadResponse,
     FileSearchResponse,
     GitCommandResponse,
+    MachineCodexModelsResponse,
     MachinePathsExistsResponse,
     MachinesResponse,
     MessagesResponse,
@@ -639,6 +640,24 @@ export class ApiClient {
                 method: 'POST',
                 body: JSON.stringify({ paths })
             }
+        )
+    }
+
+    async listMachineCodexModels(
+        machineId: string,
+        params: { limit?: number; includeHidden?: boolean } = {}
+    ): Promise<MachineCodexModelsResponse> {
+        const search = new URLSearchParams()
+        if (params.limit !== undefined) {
+            search.set('limit', String(params.limit))
+        }
+        if (params.includeHidden !== undefined) {
+            search.set('includeHidden', String(params.includeHidden))
+        }
+
+        const query = search.toString()
+        return await this.request<MachineCodexModelsResponse>(
+            `/api/machines/${encodeURIComponent(machineId)}/codex-models${query ? `?${query}` : ''}`
         )
     }
 
